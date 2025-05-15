@@ -1,0 +1,7 @@
+[package]
+name = "capnez"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+capnp_export = { path = "./capnp_export" }
