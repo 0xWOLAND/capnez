@@ -1,8 +1,15 @@
-use crate::schema_capnp::hello_world;
 use capnp_rpc::{rpc_twoparty_capnp, twoparty, RpcSystem};
 use std::net::ToSocketAddrs;
 
 use futures::AsyncReadExt;
+
+cfg_if::cfg_if! {
+    if #[cfg(include_capnp)] {
+        use crate::generated_capnp::hello_world;
+        use crate::generated_capnp::hello_request;
+        use crate::generated_capnp::hello_reply;
+    }
+}
 
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = ::std::env::args().collect();
