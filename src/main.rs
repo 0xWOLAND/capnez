@@ -5,7 +5,7 @@ struct Home {
     owner: Person,
     address: String,
     rooms: Vec<Room>,
-    security_system: SecuritySystem,
+    security_system: Option<SecuritySystem>,
 }
 
 #[derive(CapnpDerive)]
