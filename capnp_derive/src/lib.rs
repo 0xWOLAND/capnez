@@ -75,7 +75,7 @@ struct Variant {
     ty: Option<CapnpType>,
 }
 
-trait SchemaComponent {
+trait SchemaPush {
     fn push(&self);
 }
 
@@ -83,13 +83,13 @@ trait SchemaWriter {
     fn write(&self, out: &mut String);
 }
 
-impl SchemaComponent for CapnpStruct {
+impl SchemaPush for CapnpStruct {
     fn push(&self) {
         SCHEMA.lock().unwrap().0.push(self.clone());
     }
 }
 
-impl SchemaComponent for CapnpEnum {
+impl SchemaPush for CapnpEnum {
     fn push(&self) {
         SCHEMA.lock().unwrap().1.push(self.clone());
     }
