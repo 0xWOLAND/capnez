@@ -1,0 +1,15 @@
+[package]
+name = "capnez-example"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+capnp.workspace = true
+capnp-rpc.workspace = true
+futures.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+capnez-macros = { path = "../macros" }
+
+[build-dependencies]
+capnez-codegen = { path = "../codegen" }
