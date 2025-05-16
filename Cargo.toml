@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-capnp_export = { path = "./capnp_export" }
+capnp_derive = { path = "./capnp_derive" }

@@ -6,11 +6,11 @@ version = 3
 name = "capnez"
 version = "0.1.0"
 dependencies = [
- "capnp_export",
+ "capnp_derive",
 ]
 
 [[package]]
-name = "capnp_export"
+name = "capnp_derive"
 version = "0.1.0"
 dependencies = [
  "once_cell",
