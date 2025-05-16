@@ -25,6 +25,7 @@ struct ContactInfo {
 struct Room {
     name: String,
     devices: Vec<Device>,
+    monitors: Vec<Vec<u8>>,
 }
 
 #[derive(CapnpDerive)]

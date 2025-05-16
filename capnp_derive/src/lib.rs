@@ -75,19 +75,74 @@ struct Variant {
     ty: Option<CapnpType>,
 }
 
+trait SchemaComponent {
+    fn push(&self);
+}
+
+trait SchemaWriter {
+    fn write(&self, out: &mut String);
+}
+
+impl SchemaComponent for CapnpStruct {
+    fn push(&self) {
+        SCHEMA.lock().unwrap().0.push(self.clone());
+    }
+}
+
+impl SchemaComponent for CapnpEnum {
+    fn push(&self) {
+        SCHEMA.lock().unwrap().1.push(self.clone());
+    }
+}
+
+impl SchemaWriter for CapnpEnum {
+    fn write(&self, out: &mut String) {
+        if self.variants.iter().any(|v| v.ty.is_some()) {
+            out.push_str(&format!("struct {} {{\n", self.name));
+            for (i, v) in self.variants.iter().enumerate() {
+                let ty = v.ty.as_ref().map_or("Void".to_string(), |t| t.to_string());
+                out.push_str(&format!("  {} @{} :{};\n", v.name, i, ty));
+            }
+            out.push_str("}\n\n");
+        } else {
+            out.push_str(&format!("enum {} {{\n", self.name));
+            for (i, v) in self.variants.iter().enumerate() {
+                out.push_str(&format!("  {} @{};\n", v.name, i));
+            }
+            out.push_str("}\n\n");
+        }
+    }
+}
+
+impl SchemaWriter for CapnpStruct {
+    fn write(&self, out: &mut String) {
+        out.push_str(&format!("struct {} {{\n", self.name));
+        for f in &self.fields {
+            out.push_str(&format!("  {} @{} :{};\n", f.name, f.id, f.ty));
+        }
+        out.push_str("}\n\n");
+    }
+}
+
 #[proc_macro_derive(CapnpDerive)]
 pub fn capnp_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match &input.data {
-        Data::Struct(_) => add_struct(&input),
-        Data::Enum(data) => add_enum(&input, data),
+        Data::Struct(_) => {
+            let s = mk_struct(&input);
+            s.push();
+        }
+        Data::Enum(data) => {
+            let e = mk_enum(&input, data);
+            e.push();
+        }
         _ => panic!("CapnpDerive only supports structs and enums"),
     }
-    write_schema();
+    write();
     TokenStream::new()
 }
 
-fn add_struct(input: &DeriveInput) {
+fn mk_struct(input: &DeriveInput) -> CapnpStruct {
     let name = input.ident.to_string();
     let fields = match &input.data {
         Data::Struct(s) => match &s.fields {
@@ -96,49 +151,49 @@ fn add_struct(input: &DeriveInput) {
                 .map(|(i, f)| Field {
                     name: f.ident.as_ref().unwrap().to_string(),
                     id: i,
-                    ty: map_type(&f.ty),
+                    ty: map_ty(&f.ty),
                 })
                 .collect(),
             _ => panic!("CapnpDerive only supports named structs"),
         },
         _ => panic!("CapnpDerive only supports structs"),
     };
-    SCHEMA.lock().unwrap().0.push(CapnpStruct { name, fields });
+    CapnpStruct { name, fields }
 }
 
-fn add_enum(input: &DeriveInput, data: &syn::DataEnum) {
+fn mk_enum(input: &DeriveInput, data: &syn::DataEnum) -> CapnpEnum {
     let name = input.ident.to_string();
     let variants = data.variants.iter()
         .map(|v| {
-            let variant_type = match &v.fields {
+            let ty = match &v.fields {
                 syn::Fields::Unnamed(fields) if fields.unnamed.len() == 1 => 
-                    Some(map_type(&fields.unnamed[0].ty)),
+                    Some(map_ty(&fields.unnamed[0].ty)),
                 syn::Fields::Unnamed(_) => panic!("Enum variants must have exactly one unnamed field"),
                 _ => None,
             };
             Variant {
                 name: v.ident.to_string(),
-                ty: variant_type,
+                ty,
             }
         })
         .collect();
-    SCHEMA.lock().unwrap().1.push(CapnpEnum { name, variants });
+    CapnpEnum { name, variants }
 }
 
-fn write_schema() {
+fn write() {
     let (structs, enums) = SCHEMA.lock().unwrap().clone();
-    let ordered = topo_sort(&structs);
+    let ordered = sort_deps(&structs);
     
     let mut out = String::from("@0xabcdefabcdefabcdef;\n\n");
     
     // Write enums first
     for e in enums {
-        write_enum(&mut out, &e);
+        e.write(&mut out);
     }
     
     // Then write structs
     for s in ordered {
-        write_struct(&mut out, s);
+        s.write(&mut out);
     }
 
     let dir = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("target/capnp");
@@ -146,32 +201,7 @@ fn write_schema() {
     fs::write(dir.join("generated.capnp"), out).unwrap();
 }
 
-fn write_enum(out: &mut String, e: &CapnpEnum) {
-    if e.variants.iter().any(|v| v.ty.is_some()) {
-        out.push_str(&format!("struct {} {{\n", e.name));
-        for (i, v) in e.variants.iter().enumerate() {
-            let type_str = v.ty.as_ref().map_or("Void".to_string(), |t| t.to_string());
-            out.push_str(&format!("  {} @{} :{};\n", v.name, i, type_str));
-        }
-        out.push_str("}\n\n");
-    } else {
-        out.push_str(&format!("enum {} {{\n", e.name));
-        for (i, v) in e.variants.iter().enumerate() {
-            out.push_str(&format!("  {} @{};\n", v.name, i));
-        }
-        out.push_str("}\n\n");
-    }
-}
-
-fn write_struct(out: &mut String, s: &CapnpStruct) {
-    out.push_str(&format!("struct {} {{\n", s.name));
-    for f in &s.fields {
-        out.push_str(&format!("  {} @{} :{};\n", f.name, f.id, f.ty));
-    }
-    out.push_str("}\n\n");
-}
-
-fn map_type(ty: &Type) -> CapnpType {
+fn map_ty(ty: &Type) -> CapnpType {
     match ty {
         Type::Path(p) if p.qself.is_none() => {
             let id = p.path.segments.last().unwrap().ident.to_string();
@@ -180,7 +210,8 @@ fn map_type(ty: &Type) -> CapnpType {
                 "u32" => CapnpType::Primitive(PrimitiveType::UInt32),
                 "u64" => CapnpType::Primitive(PrimitiveType::UInt64),
                 "bool" => CapnpType::Primitive(PrimitiveType::Bool),
-                "Option" => CapnpType::Optional(Box::new(extract_option_type(p))),
+                "Option" => CapnpType::Optional(Box::new(extract_opt_ty(p))),
+                "Vec" => CapnpType::List(Box::new(extract_list_ty(p))),
                 name => if is_enum(name) {
                     CapnpType::Enum(name.to_string())
                 } else {
@@ -188,7 +219,7 @@ fn map_type(ty: &Type) -> CapnpType {
                 }
             }
         }
-        Type::Array(a) => CapnpType::List(Box::new(map_type(&a.elem))),
+        Type::Array(a) => CapnpType::List(Box::new(map_ty(&a.elem))),
         _ => panic!("Unsupported type"),
     }
 }
@@ -197,11 +228,11 @@ fn is_enum(name: &str) -> bool {
     SCHEMA.lock().unwrap().1.iter().any(|e| e.name == name)
 }
 
-fn extract_option_type(p: &syn::TypePath) -> CapnpType {
+fn extract_opt_ty(p: &syn::TypePath) -> CapnpType {
     match &p.path.segments[0].arguments {
         PathArguments::AngleBracketed(args) => {
             if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
-                map_type(inner_ty)
+                map_ty(inner_ty)
             } else {
                 panic!("Option must have a type parameter")
             }
@@ -210,17 +241,30 @@ fn extract_option_type(p: &syn::TypePath) -> CapnpType {
     }
 }
 
-fn topo_sort<'a>(items: &'a [CapnpStruct]) -> Vec<&'a CapnpStruct> {
-    let mut visited = HashSet::new();
+fn extract_list_ty(p: &syn::TypePath) -> CapnpType {
+    match &p.path.segments[0].arguments {
+        PathArguments::AngleBracketed(args) => {
+            if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
+                map_ty(inner_ty)
+            } else {
+                panic!("Vec must have a type parameter")
+            }
+        }
+        _ => panic!("Vec must have angle bracketed arguments")
+    }
+}
+
+fn sort_deps<'a>(items: &'a [CapnpStruct]) -> Vec<&'a CapnpStruct> {
+    let mut seen = HashSet::new();
     let mut order = Vec::new();
     
-    fn dfs<'b>(s: &'b CapnpStruct, items: &'b [CapnpStruct], visited: &mut HashSet<String>, order: &mut Vec<&'b CapnpStruct>) {
-        if !visited.insert(s.name.clone()) { return; }
+    fn visit<'b>(s: &'b CapnpStruct, items: &'b [CapnpStruct], seen: &mut HashSet<String>, order: &mut Vec<&'b CapnpStruct>) {
+        if !seen.insert(s.name.clone()) { return; }
         
         for f in &s.fields {
-            if let Some(name) = extract_struct_name(&f.ty) {
+            if let Some(name) = get_struct_name(&f.ty) {
                 if let Some(dep) = items.iter().find(|x| x.name == name) {
-                    dfs(dep, items, visited, order);
+                    visit(dep, items, seen, order);
                 }
             }
         }
@@ -228,12 +272,12 @@ fn topo_sort<'a>(items: &'a [CapnpStruct]) -> Vec<&'a CapnpStruct> {
     }
     
     for s in items {
-        dfs(s, items, &mut visited, &mut order);
+        visit(s, items, &mut seen, &mut order);
     }
     order
 }
 
-fn extract_struct_name(ty: &CapnpType) -> Option<String> {
+fn get_struct_name(ty: &CapnpType) -> Option<String> {
     match ty {
         CapnpType::Struct(name) => Some(name.clone()),
         CapnpType::List(inner) => {
