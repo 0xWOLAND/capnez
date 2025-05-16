@@ -7,6 +7,9 @@ name = "capnez"
 version = "0.1.0"
 dependencies = [
  "capnp_derive",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

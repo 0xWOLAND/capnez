@@ -1,12 +1,12 @@
 use proc_macro::TokenStream;
-use syn::{parse_macro_input, DeriveInput, Data, Fields, Type, PathArguments, GenericArgument};
+use syn::{parse_macro_input, DeriveInput, Data, Fields, Type, PathArguments, GenericArgument, ItemTrait};
 use once_cell::sync::Lazy;
 use std::{sync::Mutex, fs, env, path::Path};
 use std::fmt;
 use std::collections::HashSet;
 
-type Schema = (Vec<CapnpStruct>, Vec<CapnpEnum>);
-static SCHEMA: Lazy<Mutex<Schema>> = Lazy::new(|| Mutex::new((Vec::new(), Vec::new())));
+type Schema = (Vec<CapnpStruct>, Vec<CapnpEnum>, Vec<CapnpInterface>);
+static SCHEMA: Lazy<Mutex<Schema>> = Lazy::new(|| Mutex::new((Vec::new(), Vec::new(), Vec::new())));
 
 #[derive(Clone)]
 struct CapnpStruct {
@@ -36,6 +36,26 @@ enum PrimitiveType {
     UInt32,
     UInt64,
     Bool,
+}
+
+#[derive(Clone)]
+struct CapnpInterface {
+    name: String,
+    methods: Vec<Method>,
+}
+
+#[derive(Clone)]
+struct Method {
+    name: String,
+    id: usize,
+    params: Vec<Param>,
+    ret: Option<CapnpType>,
+}
+
+#[derive(Clone)]
+struct Param {
+    name: String,
+    ty: CapnpType,
 }
 
 impl fmt::Display for CapnpType {
@@ -95,6 +115,12 @@ impl SchemaPush for CapnpEnum {
     }
 }
 
+impl SchemaPush for CapnpInterface {
+    fn push(&self) {
+        SCHEMA.lock().unwrap().2.push(self.clone());
+    }
+}
+
 impl SchemaWriter for CapnpEnum {
     fn write(&self, out: &mut String) {
         if self.variants.iter().any(|v| v.ty.is_some()) {
@@ -124,6 +150,27 @@ impl SchemaWriter for CapnpStruct {
     }
 }
 
+impl SchemaWriter for CapnpInterface {
+    fn write(&self, out: &mut String) {
+        out.push_str(&format!("interface {} {{\n", self.name));
+        for m in &self.methods {
+            out.push_str(&format!("  {} @{} (", m.name, m.id));
+            for (i, p) in m.params.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&format!("{} :{}", p.name, p.ty));
+            }
+            out.push_str(")");
+            if let Some(ret) = &m.ret {
+                out.push_str(&format!(" -> {}", ret));
+            }
+            out.push_str(";\n");
+        }
+        out.push_str("}\n\n");
+    }
+}
+
 #[proc_macro_derive(CapnpDerive)]
 pub fn capnp_derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -140,6 +187,54 @@ pub fn capnp_derive(input: TokenStream) -> TokenStream {
     }
     write();
     TokenStream::new()
+}
+
+#[proc_macro_attribute]
+pub fn capnp_interface(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemTrait);
+    let iface = mk_interface(&input);
+    iface.push();
+    write();
+    TokenStream::new()
+}
+
+fn mk_interface(input: &ItemTrait) -> CapnpInterface {
+    let name = input.ident.to_string();
+    let methods = input.items.iter()
+        .filter_map(|item| {
+            if let syn::TraitItem::Fn(method) = item {
+                let name = method.sig.ident.to_string();
+                let params = method.sig.inputs.iter()
+                    .filter_map(|arg| {
+                        if let syn::FnArg::Typed(pat_type) = arg {
+                            if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+                                let name = pat_ident.ident.to_string();
+                                let ty = map_ty(&pat_type.ty);
+                                Some(Param { name, ty })
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let ret = match &method.sig.output {
+                    syn::ReturnType::Type(_, ty) => Some(map_ty(&ty)),
+                    syn::ReturnType::Default => None,
+                };
+                Some(Method {
+                    name,
+                    id: 0, // TODO: Generate unique IDs
+                    params,
+                    ret,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    CapnpInterface { name, methods }
 }
 
 fn mk_struct(input: &DeriveInput) -> CapnpStruct {
@@ -181,7 +276,7 @@ fn mk_enum(input: &DeriveInput, data: &syn::DataEnum) -> CapnpEnum {
 }
 
 fn write() {
-    let (structs, enums) = SCHEMA.lock().unwrap().clone();
+    let (structs, enums, interfaces) = SCHEMA.lock().unwrap().clone();
     let ordered = sort_deps(&structs);
     
     let mut out = String::from("@0xabcdefabcdefabcdef;\n\n");
@@ -194,6 +289,11 @@ fn write() {
     // Then write structs
     for s in ordered {
         s.write(&mut out);
+    }
+
+    // Finally write interfaces
+    for i in interfaces {
+        i.write(&mut out);
     }
 
     let dir = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("target/capnp");

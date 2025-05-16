@@ -1,58 +1,18 @@
-use capnp_derive::CapnpDerive;
+use capnp_derive::{CapnpDerive, capnp_interface};
 
 #[derive(CapnpDerive)]
-struct Home {
-    owner: Person,
-    address: String,
-    rooms: Vec<Room>,
-    security_system: Option<SecuritySystem>,
+pub struct HelloRequest {
+    pub name: String,
 }
 
 #[derive(CapnpDerive)]
-struct Person {
-    name: String,
-    age: u32,
-    contact_info: ContactInfo,
+pub struct HelloReply {
+    pub message: String,
 }
 
-#[derive(CapnpDerive)]
-struct ContactInfo {
-    email: String,
-    phone: String,
-}
-
-#[derive(CapnpDerive)]
-struct Room {
-    name: String,
-    devices: Vec<Device>,
-    monitors: Vec<Vec<u8>>,
-}
-
-#[derive(CapnpDerive)]
-struct Device {
-    id: String,
-    kind: DeviceKind,
-    status: DeviceStatus,
-}
-
-#[derive(CapnpDerive)]
-enum DeviceKind {
-    Thermostat,
-    Light,
-    Camera,
-    Lock,
-}
-
-#[derive(CapnpDerive)]
-struct DeviceStatus {
-    online: bool,
-    battery_level: u8,
-}
-
-#[derive(CapnpDerive)]
-struct SecuritySystem {
-    armed: bool,
-    cameras: Vec<Device>,
+#[capnp_interface]
+pub trait HelloWorld {
+    fn say_hello(&self, request: HelloRequest) -> HelloReply;
 }
 
 fn main() {
