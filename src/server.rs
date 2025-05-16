@@ -1,10 +1,9 @@
 use capnp::capability::Promise;
 use capnp_rpc::{pry, rpc_twoparty_capnp, twoparty, RpcSystem};
-
-use crate::schema_capnp::hello_world;
-
 use futures::AsyncReadExt;
 use std::net::ToSocketAddrs;
+
+use crate::generated_capnp::hello_world;
 
 struct HelloWorldImpl;
 
@@ -59,4 +58,4 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .await
-}
+} 
