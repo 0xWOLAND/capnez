@@ -1,22 +1,8 @@
-[package]
-name = "capnez"
-version = "0.1.0"
-edition = "2021"
-build = "build.rs"
-
-[dependencies]
-capnp = "0.21.0"
-capnp-rpc = "0.21.0"
-tokio = { version = "1.0", features = ["full"] }
-futures = "0.3"
-tokio-util = { version = "0.7", features = ["compat"] }
-capnp_derive = { path = "./capnp_derive" }
-capnp_macros = { path = "./capnp_macros" }
-cfg-if = "1.0.0"
-
-[build-dependencies]
-capnpc = "0.21.0"
-
-[features]
-include_capnp = []
-default = ["include_capnp"]
+[workspace]
+members = [
+    "capnez",
+    "codegen",
+    "capnez-macros"
+]
+default-run = "capnez"
+resolver = "2"
