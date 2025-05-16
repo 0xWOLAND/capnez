@@ -90,7 +90,6 @@ dependencies = [
  "capnez-macros",
  "capnp",
  "capnp-rpc",
- "cfg-if",
  "codegen",
  "futures",
  "tokio",

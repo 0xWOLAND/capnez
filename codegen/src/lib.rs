@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::{fs, path::{Path, PathBuf}, collections::HashSet, env};
 use walkdir::WalkDir;
-use syn::{parse_file, Item, DeriveInput, Data, Fields, Type, PathArguments, GenericArgument, ItemTrait};
+use syn::{parse_file, Item, DeriveInput, Data, Fields, Type, PathArguments, GenericArgument, ItemTrait, Attribute};
 
 #[derive(Clone)]
 pub struct CapnpStruct {
@@ -82,7 +82,7 @@ fn mk_struct(input: &DeriveInput) -> CapnpStruct {
                 .enumerate()
                 .map(|(i, f)| (f.ident.as_ref().unwrap().to_string(), i, map_ty(&f.ty)))
                 .collect(),
-            _ => panic!("Only named structs are supported"),
+            _ => panic!("Only named structs are supported")
         },
         _ => panic!("Only structs are supported"),
     };
@@ -178,6 +178,12 @@ fn get_struct_name(ty: &CapnpType) -> Option<String> {
     }
 }
 
+fn has_capnp_attr(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path().segments.last().map_or(false, |seg| seg.ident == "capnp")
+    })
+}
+
 /// Generate Cap'n Proto schema from Rust source files
 /// 
 /// The schema will be generated in the target directory under `generated/schema.capnp`
@@ -212,7 +218,7 @@ pub fn generate_schema() -> Result<()> {
         // Process each item in the file
         for item in file.items {
             match item {
-                Item::Struct(s) => {
+                Item::Struct(s) if has_capnp_attr(&s.attrs) => {
                     let input = DeriveInput {
                         attrs: s.attrs,
                         vis: s.vis,
@@ -226,7 +232,7 @@ pub fn generate_schema() -> Result<()> {
                     };
                     structs.push(mk_struct(&input));
                 }
-                Item::Enum(e) => {
+                Item::Enum(e) if has_capnp_attr(&e.attrs) => {
                     let input = DeriveInput {
                         attrs: e.attrs,
                         vis: e.vis,
@@ -244,7 +250,7 @@ pub fn generate_schema() -> Result<()> {
                         variants: e.variants,
                     }));
                 }
-                Item::Trait(t) => interfaces.push(mk_interface(&t)),
+                Item::Trait(t) if has_capnp_attr(&t.attrs) => interfaces.push(mk_interface(&t)),
                 _ => {}
             }
         }
