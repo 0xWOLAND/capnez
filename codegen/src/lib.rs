@@ -1,25 +1,7 @@
 use anyhow::{Context, Result};
-use std::{fs, path::{Path, PathBuf}, collections::HashSet, env};
+use std::{fs, path::PathBuf, collections::HashSet, env};
 use walkdir::WalkDir;
 use syn::{parse_file, Item, DeriveInput, Data, Fields, Type, PathArguments, GenericArgument, ItemTrait, Attribute};
-
-#[derive(Clone)]
-pub struct CapnpStruct {
-    name: String,
-    fields: Vec<(String, usize, CapnpType)>,
-}
-
-#[derive(Clone)]
-pub struct CapnpEnum {
-    name: String,
-    variants: Vec<(String, Option<CapnpType>)>,
-}
-
-#[derive(Clone)]
-pub struct CapnpInterface {
-    name: String,
-    methods: Vec<(String, Vec<(String, CapnpType)>, Option<CapnpType>)>,
-}
 
 #[derive(Clone)]
 enum CapnpType {
@@ -33,13 +15,31 @@ enum CapnpType {
 impl std::fmt::Display for CapnpType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CapnpType::Primitive(p) => write!(f, "{}", p),
-            CapnpType::Struct(n) => write!(f, "{}", n),
-            CapnpType::List(inner) => write!(f, "List({})", inner),
-            CapnpType::Enum(n) => write!(f, "{}", n),
-            CapnpType::Optional(inner) => write!(f, "union {{\n  value @0 :{};\n  none @1 :Void;\n}}", inner),
+            Self::Primitive(p) => write!(f, "{}", p),
+            Self::Struct(n) => write!(f, "{}", n),
+            Self::List(inner) => write!(f, "List({})", inner),
+            Self::Enum(n) => write!(f, "{}", n),
+            Self::Optional(inner) => write!(f, "union {{\n  value @0 :{};\n  none @1 :Void;\n}}", inner),
         }
     }
+}
+
+#[derive(Clone)]
+struct CapnpStruct {
+    name: String,
+    fields: Vec<(String, usize, CapnpType)>,
+}
+
+#[derive(Clone)]
+struct CapnpEnum {
+    name: String,
+    variants: Vec<(String, Option<CapnpType>)>,
+}
+
+#[derive(Clone)]
+struct CapnpInterface {
+    name: String,
+    methods: Vec<(String, Vec<(String, CapnpType)>, Option<CapnpType>)>,
 }
 
 fn map_ty(ty: &Type) -> CapnpType {
@@ -63,13 +63,12 @@ fn map_ty(ty: &Type) -> CapnpType {
 
 fn extract_generic_ty(p: &syn::TypePath) -> CapnpType {
     match &p.path.segments[0].arguments {
-        PathArguments::AngleBracketed(args) => {
-            if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
-                map_ty(inner_ty)
-            } else {
-                panic!("Generic type must have a type parameter")
-            }
-        }
+        PathArguments::AngleBracketed(args) => args.args.first()
+            .and_then(|arg| match arg {
+                GenericArgument::Type(inner_ty) => Some(map_ty(inner_ty)),
+                _ => None
+            })
+            .unwrap_or_else(|| panic!("Generic type must have a type parameter")),
         _ => panic!("Generic type must have angle bracketed arguments")
     }
 }
