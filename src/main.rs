@@ -1,18 +1,21 @@
-use capnp_derive::{CapnpDerive, capnp_interface};
+use capnp_derive::capnp;
+use capnp_macros::maybe_include_capnp;
 
-#[derive(CapnpDerive)]
-pub struct HelloRequest {
-    pub name: String,
+maybe_include_capnp!();
+
+#[capnp]
+struct HelloRequest {
+    name: String,
 }
 
-#[derive(CapnpDerive)]
-pub struct HelloReply {
-    pub message: String,
+#[capnp]
+struct HelloReply {
+    message: String,
 }
 
-#[capnp_interface]
-pub trait HelloWorld {
-    fn say_hello(&self, request: HelloRequest) -> HelloReply;
+#[capnp]
+trait HelloWorld {
+    fn sayHello(request: HelloRequest) -> HelloReply;
 }
 
 fn main() {

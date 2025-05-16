@@ -171,29 +171,49 @@ impl SchemaWriter for CapnpInterface {
     }
 }
 
-#[proc_macro_derive(CapnpDerive)]
-pub fn capnp_derive(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    match &input.data {
-        Data::Struct(_) => {
-            let s = mk_struct(&input);
+#[proc_macro_attribute]
+pub fn capnp(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as syn::Item);
+    match input {
+        syn::Item::Struct(s) => {
+            let s = mk_struct(&DeriveInput {
+                attrs: s.attrs,
+                vis: s.vis,
+                ident: s.ident,
+                generics: s.generics,
+                data: syn::Data::Struct(syn::DataStruct {
+                    struct_token: s.struct_token,
+                    fields: s.fields,
+                    semi_token: s.semi_token,
+                }),
+            });
             s.push();
         }
-        Data::Enum(data) => {
-            let e = mk_enum(&input, data);
+        syn::Item::Enum(e) => {
+            let variants = e.variants.clone();
+            let e = mk_enum(&DeriveInput {
+                attrs: e.attrs,
+                vis: e.vis,
+                ident: e.ident,
+                generics: e.generics,
+                data: syn::Data::Enum(syn::DataEnum {
+                    enum_token: e.enum_token,
+                    brace_token: e.brace_token,
+                    variants: e.variants,
+                }),
+            }, &syn::DataEnum {
+                enum_token: e.enum_token,
+                brace_token: e.brace_token,
+                variants,
+            });
             e.push();
         }
-        _ => panic!("CapnpDerive only supports structs and enums"),
+        syn::Item::Trait(t) => {
+            let iface = mk_interface(&t);
+            iface.push();
+        }
+        _ => panic!("capnp attribute only supports structs, enums, and traits"),
     }
-    write();
-    TokenStream::new()
-}
-
-#[proc_macro_attribute]
-pub fn capnp_interface(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(item as ItemTrait);
-    let iface = mk_interface(&input);
-    iface.push();
     write();
     TokenStream::new()
 }
@@ -298,7 +318,16 @@ fn write() {
 
     let dir = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("target/capnp");
     fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("generated.capnp"), out).unwrap();
+    let schema_path = dir.join("generated.capnp");
+    fs::write(&schema_path, out).unwrap();
+
+    // Run the Cap'n Proto compiler
+    capnpc::CompilerCommand::new()
+        .file(schema_path)
+        .run()
+        .expect("compiling schema");
+
+    println!("cargo:rustc-cfg=include_capnp");
 }
 
 fn map_ty(ty: &Type) -> CapnpType {

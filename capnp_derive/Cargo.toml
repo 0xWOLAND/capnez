@@ -8,6 +8,7 @@ proc-macro = true
 
 [dependencies]
 syn = { version = "2.0", features = ["full"] }
+capnpc = "0.15"
 quote = "1.0"
 proc-macro2 = "1.0"
 once_cell = "1.19"
