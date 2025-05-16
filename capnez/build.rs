@@ -1,9 +1,14 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
+use std::env;
 
 fn main() -> Result<()> {
-    let input = PathBuf::from("src");
-    let output = PathBuf::from("src/generated");
+    // Get the absolute path to the crate root
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+    
+    let input = manifest_dir.join("src");
+    let output = out_dir.join("generated");
     
     println!("cargo:warning=Generating Cap'n Proto schema from {}", input.display());
     println!("cargo:warning=Output will be written to {}", output.display());

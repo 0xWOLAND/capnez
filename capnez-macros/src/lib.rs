@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, ItemStruct, ItemEnum, ItemTrait};
+use syn::{parse_macro_input, ItemStruct, ItemEnum, ItemTrait};
 
 #[proc_macro_attribute]
 pub fn capnp(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -23,7 +23,7 @@ fn impl_capnp_struct(item: ItemStruct) -> TokenStream {
 
         impl #impl_generics #name #ty_generics #where_clause {
             pub fn capnp_schema() -> &'static str {
-                include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/generated/schema.capnp"))
+                include_str!(concat!(env!("OUT_DIR"), "/generated/schema.capnp"))
             }
         }
     };
@@ -40,7 +40,7 @@ fn impl_capnp_enum(item: ItemEnum) -> TokenStream {
 
         impl #impl_generics #name #ty_generics #where_clause {
             pub fn capnp_schema() -> &'static str {
-                include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/generated/schema.capnp"))
+                include_str!(concat!(env!("OUT_DIR"), "/generated/schema.capnp"))
             }
         }
     };
@@ -52,4 +52,4 @@ fn impl_capnp_trait(item: ItemTrait) -> TokenStream {
     TokenStream::from(quote! {
         #item
     })
-} 
+}
