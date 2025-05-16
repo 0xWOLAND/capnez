@@ -1,7 +1,4 @@
-use capnp_derive::capnp;
-use capnp_macros::maybe_include_capnp;
-
-maybe_include_capnp!();
+use capnez_macros::capnp;
 
 #[capnp]
 struct HelloRequest {
@@ -16,6 +13,10 @@ struct HelloReply {
 #[capnp]
 trait HelloWorld {
     fn sayHello(request: HelloRequest) -> HelloReply;
+}
+
+pub mod schema_capnp {
+    include!(concat!(env!("OUT_DIR"), "/generated/schema_capnp.rs"));
 }
 
 pub mod client;
