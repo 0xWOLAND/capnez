@@ -83,13 +83,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
-name = "capnez"
+name = "capnez-codegen"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "capnpc",
+ "quote",
+ "structopt",
+ "syn 2.0.101",
+ "tempfile",
+ "walkdir",
+]
+
+[[package]]
+name = "capnez-example"
+version = "0.1.0"
+dependencies = [
+ "capnez-codegen",
  "capnez-macros",
  "capnp",
  "capnp-rpc",
- "codegen",
  "futures",
  "tokio",
  "tokio-util",
@@ -163,19 +176,6 @@ dependencies = [
  "textwrap",
  "unicode-width",
  "vec_map",
-]
-
-[[package]]
-name = "codegen"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "capnpc",
- "quote",
- "structopt",
- "syn 2.0.101",
- "tempfile",
- "walkdir",
 ]
 
 [[package]]
