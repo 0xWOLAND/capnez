@@ -1,149 +1,44 @@
 use anyhow::{Context, Result};
-use std::fs;
-use std::path::Path;
+use std::{fs, path::{Path, PathBuf}, collections::HashSet, env};
 use walkdir::WalkDir;
 use syn::{parse_file, Item, DeriveInput, Data, Fields, Type, PathArguments, GenericArgument, ItemTrait};
-use std::fmt;
-use std::collections::HashSet;
 
 #[derive(Clone)]
 pub struct CapnpStruct {
     name: String,
-    fields: Vec<Field>,
+    fields: Vec<(String, usize, CapnpType)>,
 }
 
 #[derive(Clone)]
-struct Field {
+pub struct CapnpEnum {
     name: String,
-    id: usize,
-    ty: CapnpType,
+    variants: Vec<(String, Option<CapnpType>)>,
+}
+
+#[derive(Clone)]
+pub struct CapnpInterface {
+    name: String,
+    methods: Vec<(String, Vec<(String, CapnpType)>, Option<CapnpType>)>,
 }
 
 #[derive(Clone)]
 enum CapnpType {
-    Primitive(PrimitiveType),
+    Primitive(&'static str),
     Struct(String),
     List(Box<CapnpType>),
     Enum(String),
     Optional(Box<CapnpType>),
 }
 
-#[derive(Clone)]
-enum PrimitiveType {
-    Text,
-    UInt32,
-    UInt64,
-    Bool,
-}
-
-#[derive(Clone)]
-pub struct CapnpInterface {
-    name: String,
-    methods: Vec<Method>,
-}
-
-#[derive(Clone)]
-struct Method {
-    name: String,
-    id: usize,
-    params: Vec<Param>,
-    ret: Option<CapnpType>,
-}
-
-#[derive(Clone)]
-struct Param {
-    name: String,
-    ty: CapnpType,
-}
-
-#[derive(Clone)]
-pub struct CapnpEnum {
-    name: String,
-    variants: Vec<Variant>,
-}
-
-#[derive(Clone)]
-struct Variant {
-    name: String,
-    ty: Option<CapnpType>,
-}
-
-impl fmt::Display for CapnpType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for CapnpType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CapnpType::Primitive(p) => write!(f, "{}", p),
             CapnpType::Struct(n) => write!(f, "{}", n),
             CapnpType::List(inner) => write!(f, "List({})", inner),
             CapnpType::Enum(n) => write!(f, "{}", n),
-            CapnpType::Optional(inner) => {
-                write!(f, "union {{\n  value @0 :{};\n  none @1 :Void;\n}}", inner)
-            }
+            CapnpType::Optional(inner) => write!(f, "union {{\n  value @0 :{};\n  none @1 :Void;\n}}", inner),
         }
-    }
-}
-
-impl fmt::Display for PrimitiveType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PrimitiveType::Text => write!(f, "Text"),
-            PrimitiveType::UInt32 => write!(f, "UInt32"),
-            PrimitiveType::UInt64 => write!(f, "UInt64"),
-            PrimitiveType::Bool => write!(f, "Bool"),
-        }
-    }
-}
-
-trait SchemaWriter {
-    fn write(&self, out: &mut String);
-}
-
-impl SchemaWriter for CapnpEnum {
-    fn write(&self, out: &mut String) {
-        if self.variants.iter().any(|v| v.ty.is_some()) {
-            out.push_str(&format!("struct {} {{\n", self.name));
-            for (i, v) in self.variants.iter().enumerate() {
-                let ty = v.ty.as_ref().map_or("Void".to_string(), |t| t.to_string());
-                out.push_str(&format!("  {} @{} :{};\n", v.name, i, ty));
-            }
-            out.push_str("}\n\n");
-        } else {
-            out.push_str(&format!("enum {} {{\n", self.name));
-            for (i, v) in self.variants.iter().enumerate() {
-                out.push_str(&format!("  {} @{};\n", v.name, i));
-            }
-            out.push_str("}\n\n");
-        }
-    }
-}
-
-impl SchemaWriter for CapnpStruct {
-    fn write(&self, out: &mut String) {
-        out.push_str(&format!("struct {} {{\n", self.name));
-        for f in &self.fields {
-            out.push_str(&format!("  {} @{} :{};\n", f.name, f.id, f.ty));
-        }
-        out.push_str("}\n\n");
-    }
-}
-
-impl SchemaWriter for CapnpInterface {
-    fn write(&self, out: &mut String) {
-        out.push_str(&format!("interface {} {{\n", self.name));
-        for m in &self.methods {
-            out.push_str(&format!("  {} @{} (", m.name, m.id));
-            for (i, p) in m.params.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
-                }
-                out.push_str(&format!("{} :{}", p.name, p.ty));
-            }
-            out.push_str(")");
-            if let Some(ret) = &m.ret {
-                out.push_str(&format!(" -> {}", ret));
-            }
-            out.push_str(";\n");
-        }
-        out.push_str("}\n\n");
     }
 }
 
@@ -152,12 +47,12 @@ fn map_ty(ty: &Type) -> CapnpType {
         Type::Path(p) if p.qself.is_none() => {
             let id = p.path.segments.last().unwrap().ident.to_string();
             match id.as_str() {
-                "String" => CapnpType::Primitive(PrimitiveType::Text),
-                "u32" => CapnpType::Primitive(PrimitiveType::UInt32),
-                "u64" => CapnpType::Primitive(PrimitiveType::UInt64),
-                "bool" => CapnpType::Primitive(PrimitiveType::Bool),
-                "Option" => CapnpType::Optional(Box::new(extract_opt_ty(p))),
-                "Vec" => CapnpType::List(Box::new(extract_list_ty(p))),
+                "String" => CapnpType::Primitive("Text"),
+                "u32" => CapnpType::Primitive("UInt32"),
+                "u64" => CapnpType::Primitive("UInt64"),
+                "bool" => CapnpType::Primitive("Bool"),
+                "Option" => CapnpType::Optional(Box::new(extract_generic_ty(p))),
+                "Vec" => CapnpType::List(Box::new(extract_generic_ty(p))),
                 name => CapnpType::Struct(name.to_string())
             }
         }
@@ -166,29 +61,16 @@ fn map_ty(ty: &Type) -> CapnpType {
     }
 }
 
-fn extract_opt_ty(p: &syn::TypePath) -> CapnpType {
+fn extract_generic_ty(p: &syn::TypePath) -> CapnpType {
     match &p.path.segments[0].arguments {
         PathArguments::AngleBracketed(args) => {
             if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
                 map_ty(inner_ty)
             } else {
-                panic!("Option must have a type parameter")
+                panic!("Generic type must have a type parameter")
             }
         }
-        _ => panic!("Option must have angle bracketed arguments")
-    }
-}
-
-fn extract_list_ty(p: &syn::TypePath) -> CapnpType {
-    match &p.path.segments[0].arguments {
-        PathArguments::AngleBracketed(args) => {
-            if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
-                map_ty(inner_ty)
-            } else {
-                panic!("Vec must have a type parameter")
-            }
-        }
-        _ => panic!("Vec must have angle bracketed arguments")
+        _ => panic!("Generic type must have angle bracketed arguments")
     }
 }
 
@@ -198,11 +80,7 @@ fn mk_struct(input: &DeriveInput) -> CapnpStruct {
         Data::Struct(s) => match &s.fields {
             Fields::Named(n) => n.named.iter()
                 .enumerate()
-                .map(|(i, f)| Field {
-                    name: f.ident.as_ref().unwrap().to_string(),
-                    id: i,
-                    ty: map_ty(&f.ty),
-                })
+                .map(|(i, f)| (f.ident.as_ref().unwrap().to_string(), i, map_ty(&f.ty)))
                 .collect(),
             _ => panic!("Only named structs are supported"),
         },
@@ -221,10 +99,7 @@ fn mk_enum(input: &DeriveInput, data: &syn::DataEnum) -> CapnpEnum {
                 syn::Fields::Unnamed(_) => panic!("Enum variants must have exactly one unnamed field"),
                 _ => None,
             };
-            Variant {
-                name: v.ident.to_string(),
-                ty,
-            }
+            (v.ident.to_string(), ty)
         })
         .collect();
     CapnpEnum { name, variants }
@@ -240,9 +115,7 @@ fn mk_interface(input: &ItemTrait) -> CapnpInterface {
                     .filter_map(|arg| {
                         if let syn::FnArg::Typed(pat_type) = arg {
                             if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-                                let name = pat_ident.ident.to_string();
-                                let ty = map_ty(&pat_type.ty);
-                                Some(Param { name, ty })
+                                Some((pat_ident.ident.to_string(), map_ty(&pat_type.ty)))
                             } else {
                                 None
                             }
@@ -255,12 +128,7 @@ fn mk_interface(input: &ItemTrait) -> CapnpInterface {
                     syn::ReturnType::Type(_, ty) => Some(map_ty(&ty)),
                     syn::ReturnType::Default => None,
                 };
-                Some(Method {
-                    name,
-                    id: 0, // TODO: Generate unique IDs
-                    params,
-                    ret,
-                })
+                Some((name, params, ret))
             } else {
                 None
             }
@@ -276,8 +144,8 @@ fn sort_deps<'a>(items: &'a [CapnpStruct]) -> Vec<&'a CapnpStruct> {
     fn visit<'b>(s: &'b CapnpStruct, items: &'b [CapnpStruct], seen: &mut HashSet<String>, order: &mut Vec<&'b CapnpStruct>) {
         if !seen.insert(s.name.clone()) { return; }
         
-        for f in &s.fields {
-            if let Some(name) = get_struct_name(&f.ty) {
+        for (_, _, ty) in &s.fields {
+            if let Some(name) = get_struct_name(ty) {
                 if let Some(dep) = items.iter().find(|x| x.name == name) {
                     visit(dep, items, seen, order);
                 }
@@ -312,21 +180,24 @@ fn get_struct_name(ty: &CapnpType) -> Option<String> {
 
 /// Generate Cap'n Proto schema from Rust source files
 /// 
-/// # Arguments
-/// 
-/// * `input_path` - Path to the directory containing Rust source files
-/// * `output_path` - Path where the generated Cap'n Proto schema and Rust code should be written
+/// The schema will be generated in the target directory under `generated/schema.capnp`
 /// 
 /// # Returns
 /// 
 /// Returns `Result<()>` indicating success or failure
-pub fn generate_schema(input_path: &Path, output_path: &Path) -> Result<()> {
+pub fn generate_schema() -> Result<()> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+    
+    let input = manifest_dir.join("src");
+    let output = out_dir.join("generated");
+    
     let mut structs = Vec::new();
     let mut enums = Vec::new();
     let mut interfaces = Vec::new();
     
     // Walk through all .rs files
-    for entry in WalkDir::new(input_path)
+    for entry in WalkDir::new(&input)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().map_or(false, |ext| ext == "rs"))
@@ -356,7 +227,6 @@ pub fn generate_schema(input_path: &Path, output_path: &Path) -> Result<()> {
                     structs.push(mk_struct(&input));
                 }
                 Item::Enum(e) => {
-                    let variants = e.variants.clone();
                     let input = DeriveInput {
                         attrs: e.attrs,
                         vis: e.vis,
@@ -365,7 +235,7 @@ pub fn generate_schema(input_path: &Path, output_path: &Path) -> Result<()> {
                         data: Data::Enum(syn::DataEnum {
                             enum_token: e.enum_token,
                             brace_token: e.brace_token,
-                            variants,
+                            variants: e.variants.clone(),
                         }),
                     };
                     enums.push(mk_enum(&input, &syn::DataEnum {
@@ -374,9 +244,7 @@ pub fn generate_schema(input_path: &Path, output_path: &Path) -> Result<()> {
                         variants: e.variants,
                     }));
                 }
-                Item::Trait(t) => {
-                    interfaces.push(mk_interface(&t));
-                }
+                Item::Trait(t) => interfaces.push(mk_interface(&t)),
                 _ => {}
             }
         }
@@ -387,32 +255,61 @@ pub fn generate_schema(input_path: &Path, output_path: &Path) -> Result<()> {
     
     // Write enums first
     for e in &enums {
-        e.write(&mut schema);
+        if e.variants.iter().any(|(_, ty)| ty.is_some()) {
+            schema.push_str(&format!("struct {} {{\n", e.name));
+            for (i, (name, ty)) in e.variants.iter().enumerate() {
+                let ty = ty.as_ref().map_or("Void".to_string(), |t| t.to_string());
+                schema.push_str(&format!("  {} @{} :{};\n", name, i, ty));
+            }
+            schema.push_str("}\n\n");
+        } else {
+            schema.push_str(&format!("enum {} {{\n", e.name));
+            for (i, (name, _)) in e.variants.iter().enumerate() {
+                schema.push_str(&format!("  {} @{};\n", name, i));
+            }
+            schema.push_str("}\n\n");
+        }
     }
     
     // Then write structs in dependency order
-    let ordered = sort_deps(&structs);
-    for s in ordered {
-        s.write(&mut schema);
+    for s in sort_deps(&structs) {
+        schema.push_str(&format!("struct {} {{\n", s.name));
+        for (name, id, ty) in &s.fields {
+            schema.push_str(&format!("  {} @{} :{};\n", name, id, ty));
+        }
+        schema.push_str("}\n\n");
     }
     
     // Finally write interfaces
     for i in &interfaces {
-        i.write(&mut schema);
+        schema.push_str(&format!("interface {} {{\n", i.name));
+        for (name, params, ret) in &i.methods {
+            schema.push_str(&format!("  {} @0 (", name));
+            for (i, (pname, pty)) in params.iter().enumerate() {
+                if i > 0 { schema.push_str(", "); }
+                schema.push_str(&format!("{} :{}", pname, pty));
+            }
+            schema.push_str(")");
+            if let Some(ret) = ret {
+                schema.push_str(&format!(" -> {}", ret));
+            }
+            schema.push_str(";\n");
+        }
+        schema.push_str("}\n\n");
     }
     
     // Create output directory if it doesn't exist
-    fs::create_dir_all(output_path)?;
+    fs::create_dir_all(&output)?;
     
     // Write the schema to a .capnp file
-    let schema_path = output_path.join("schema.capnp");
+    let schema_path = output.join("schema.capnp");
     fs::write(&schema_path, schema)?;
     
     // Compile the Cap'n Proto schema to Rust
     capnpc::CompilerCommand::new()
         .file(&schema_path)
-        .output_path(output_path)
-        .src_prefix(output_path)
+        .output_path(&output)
+        .src_prefix(&output)
         .run()
         .context("Failed to compile Cap'n Proto schema")?;
         
