@@ -3,7 +3,7 @@ use capnp_rpc::{pry, rpc_twoparty_capnp, twoparty, RpcSystem};
 use futures::AsyncReadExt;
 use std::net::ToSocketAddrs;
 
-use crate::hello_world_capnp::hello_world;
+use crate::generated_capnp::hello_world;
 
 struct HelloWorldImpl;
 
@@ -16,7 +16,7 @@ impl hello_world::Server for HelloWorldImpl {
         let request = pry!(pry!(params.get()).get_request());
         let name = pry!(pry!(request.get_name()).to_str());
         let message = format!("Hello, {name}!");
-        results.get().init_reply().set_message(message);
+        results.get().set_message(message);
 
         Promise::ok(())
     }

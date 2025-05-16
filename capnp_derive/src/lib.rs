@@ -323,10 +323,11 @@ fn write() {
 
     // Run the Cap'n Proto compiler
     capnpc::CompilerCommand::new()
-        .file(schema_path)
+        .file(schema_path.clone())
         .run()
         .expect("compiling schema");
 
+    println!("Built capnp schema to {}", schema_path.display());
     println!("cargo:rustc-cfg=include_capnp");
 }
 
