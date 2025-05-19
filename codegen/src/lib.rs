@@ -3,6 +3,13 @@ use std::{fs, path::PathBuf, collections::HashSet, env};
 use walkdir::WalkDir;
 use syn::{parse_file, Item, DeriveInput, Data, Fields, Type, PathArguments, GenericArgument, ItemTrait, Attribute};
 
+#[derive(Clone, Copy)]
+enum SerializationType {
+    Capnp,
+    Serde,
+    Both,
+}
+
 #[derive(Clone)]
 enum CapnpType {
     Primitive(&'static str),
@@ -10,6 +17,7 @@ enum CapnpType {
     List(Box<CapnpType>),
     Enum(String),
     Optional(Box<CapnpType>),
+    SerdeOnly(String), // For types that only exist in Serde
 }
 
 impl std::fmt::Display for CapnpType {
@@ -20,6 +28,7 @@ impl std::fmt::Display for CapnpType {
             Self::List(inner) => write!(f, "List({})", inner),
             Self::Enum(n) => write!(f, "{}", n),
             Self::Optional(inner) => write!(f, "union {{\n  value @0 :{};\n  none @1 :Void;\n}}", inner),
+            Self::SerdeOnly(n) => write!(f, "{}", n),
         }
     }
 }
@@ -28,12 +37,14 @@ impl std::fmt::Display for CapnpType {
 struct CapnpStruct {
     name: String,
     fields: Vec<(String, usize, CapnpType)>,
+    has_serde: bool,
 }
 
 #[derive(Clone)]
 struct CapnpEnum {
     name: String,
     variants: Vec<(String, Option<CapnpType>)>,
+    has_serde: bool,
 }
 
 #[derive(Clone)]
@@ -42,7 +53,37 @@ struct CapnpInterface {
     methods: Vec<(String, Vec<(String, CapnpType)>, Option<CapnpType>)>,
 }
 
-fn map_ty(ty: &Type) -> CapnpType {
+fn has_serialization_attr(attrs: &[Attribute]) -> (bool, bool) {
+    let mut has_capnp = false;
+    let mut has_serde = false;
+    
+    for attr in attrs {
+        if let Some(seg) = attr.path().segments.last() {
+            match seg.ident.to_string().as_str() {
+                "capnp" => has_capnp = true,
+                "serde" => has_serde = true,
+                "derive" => {
+                    if let syn::Meta::List(list) = &attr.meta {
+                        for nested in list.parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated).unwrap_or_default() {
+                            if let syn::Meta::Path(path) = nested {
+                                if let Some(seg) = path.segments.last() {
+                                    match seg.ident.to_string().as_str() {
+                                        "Serialize" | "Deserialize" => has_serde = true,
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (has_capnp, has_serde)
+}
+
+fn map_ty(ty: &Type, ser_type: SerializationType) -> CapnpType {
     match ty {
         Type::Path(p) if p.qself.is_none() => {
             let id = p.path.segments.last().unwrap().ident.to_string();
@@ -51,21 +92,35 @@ fn map_ty(ty: &Type) -> CapnpType {
                 "u32" => CapnpType::Primitive("UInt32"),
                 "u64" => CapnpType::Primitive("UInt64"),
                 "bool" => CapnpType::Primitive("Bool"),
-                "Option" => CapnpType::Optional(Box::new(extract_generic_ty(p))),
-                "Vec" => CapnpType::List(Box::new(extract_generic_ty(p))),
+                "Option" => CapnpType::Optional(Box::new(extract_generic_ty(p, ser_type.clone()))),
+                "Vec" => CapnpType::List(Box::new(extract_generic_ty(p, ser_type.clone()))),
+                "HashMap" | "BTreeMap" => {
+                    if matches!(ser_type, SerializationType::Serde) {
+                        CapnpType::SerdeOnly(id)
+                    } else {
+                        panic!("Map types are only supported with Serde serialization")
+                    }
+                }
+                "HashSet" | "BTreeSet" => {
+                    if matches!(ser_type, SerializationType::Serde) {
+                        CapnpType::SerdeOnly(id)
+                    } else {
+                        panic!("Set types are only supported with Serde serialization")
+                    }
+                }
                 name => CapnpType::Struct(name.to_string())
             }
         }
-        Type::Array(a) => CapnpType::List(Box::new(map_ty(&a.elem))),
+        Type::Array(a) => CapnpType::List(Box::new(map_ty(&a.elem, ser_type))),
         _ => panic!("Unsupported type"),
     }
 }
 
-fn extract_generic_ty(p: &syn::TypePath) -> CapnpType {
+fn extract_generic_ty(p: &syn::TypePath, ser_type: SerializationType) -> CapnpType {
     match &p.path.segments[0].arguments {
         PathArguments::AngleBracketed(args) => args.args.first()
             .and_then(|arg| match arg {
-                GenericArgument::Type(inner_ty) => Some(map_ty(inner_ty)),
+                GenericArgument::Type(inner_ty) => Some(map_ty(inner_ty, ser_type)),
                 _ => None
             })
             .unwrap_or_else(|| panic!("Generic type must have a type parameter")),
@@ -73,35 +128,54 @@ fn extract_generic_ty(p: &syn::TypePath) -> CapnpType {
     }
 }
 
-fn mk_struct(input: &DeriveInput) -> CapnpStruct {
+fn mk_struct(input: &DeriveInput, ser_type: SerializationType) -> CapnpStruct {
     let name = input.ident.to_string();
+    let has_serde = matches!(ser_type, SerializationType::Serde | SerializationType::Both);
     let fields = match &input.data {
         Data::Struct(s) => match &s.fields {
             Fields::Named(n) => n.named.iter()
                 .enumerate()
-                .map(|(i, f)| (f.ident.as_ref().unwrap().to_string(), i, map_ty(&f.ty)))
+                .map(|(i, f)| {
+                    let field_name = f.ident.as_ref().unwrap().to_string();
+                    let serde_rename = f.attrs.iter()
+                        .find_map(|attr| {
+                            if let syn::Meta::NameValue(nv) = &attr.meta {
+                                if let Some(seg) = attr.path().segments.last() {
+                                    if seg.ident == "serde" {
+                                        if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = &nv.value {
+                                            return Some(s.value());
+                                        }
+                                    }
+                                }
+                            }
+                            None
+                        })
+                        .unwrap_or(field_name.clone());
+                    (serde_rename, i, map_ty(&f.ty, ser_type))
+                })
                 .collect(),
             _ => panic!("Only named structs are supported")
         },
         _ => panic!("Only structs are supported"),
     };
-    CapnpStruct { name, fields }
+    CapnpStruct { name, fields, has_serde }
 }
 
-fn mk_enum(input: &DeriveInput, data: &syn::DataEnum) -> CapnpEnum {
+fn mk_enum(input: &DeriveInput, data: &syn::DataEnum, ser_type: SerializationType) -> CapnpEnum {
     let name = input.ident.to_string();
+    let has_serde = matches!(ser_type, SerializationType::Serde | SerializationType::Both);
     let variants = data.variants.iter()
         .map(|v| {
             let ty = match &v.fields {
                 syn::Fields::Unnamed(fields) if fields.unnamed.len() == 1 => 
-                    Some(map_ty(&fields.unnamed[0].ty)),
+                    Some(map_ty(&fields.unnamed[0].ty, ser_type)),
                 syn::Fields::Unnamed(_) => panic!("Enum variants must have exactly one unnamed field"),
                 _ => None,
             };
             (v.ident.to_string(), ty)
         })
         .collect();
-    CapnpEnum { name, variants }
+    CapnpEnum { name, variants, has_serde }
 }
 
 fn mk_interface(input: &ItemTrait) -> CapnpInterface {
@@ -114,7 +188,7 @@ fn mk_interface(input: &ItemTrait) -> CapnpInterface {
                     .filter_map(|arg| {
                         if let syn::FnArg::Typed(pat_type) = arg {
                             if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-                                Some((pat_ident.ident.to_string(), map_ty(&pat_type.ty)))
+                                Some((pat_ident.ident.to_string(), map_ty(&pat_type.ty, SerializationType::Capnp)))
                             } else {
                                 None
                             }
@@ -124,7 +198,7 @@ fn mk_interface(input: &ItemTrait) -> CapnpInterface {
                     })
                     .collect();
                 let ret = match &method.sig.output {
-                    syn::ReturnType::Type(_, ty) => Some(map_ty(&ty)),
+                    syn::ReturnType::Type(_, ty) => Some(map_ty(&ty, SerializationType::Capnp)),
                     syn::ReturnType::Default => None,
                 };
                 Some((name, params, ret))
@@ -177,12 +251,6 @@ fn get_struct_name(ty: &CapnpType) -> Option<String> {
     }
 }
 
-fn has_capnp_attr(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        attr.path().segments.last().map_or(false, |seg| seg.ident == "capnp")
-    })
-}
-
 /// Generate Cap'n Proto schema from Rust source files
 /// 
 /// The schema will be generated in the target directory under `generated/schema.capnp`
@@ -210,51 +278,75 @@ pub fn generate_schema() -> Result<()> {
         let content = fs::read_to_string(entry.path())
             .with_context(|| format!("Failed to read {}", entry.path().display()))?;
             
-        // Parse the Rust file using syn
         let file = parse_file(&content)
             .with_context(|| format!("Failed to parse {}", entry.path().display()))?;
             
-        // Process each item in the file
         for item in file.items {
             match item {
-                Item::Struct(s) if has_capnp_attr(&s.attrs) => {
-                    let input = DeriveInput {
-                        attrs: s.attrs,
-                        vis: s.vis,
-                        ident: s.ident,
-                        generics: s.generics,
-                        data: Data::Struct(syn::DataStruct {
-                            struct_token: s.struct_token,
-                            fields: s.fields,
-                            semi_token: s.semi_token,
-                        }),
-                    };
-                    structs.push(mk_struct(&input));
+                Item::Struct(s) => {
+                    let (has_capnp, has_serde) = has_serialization_attr(&s.attrs);
+                    if has_capnp || has_serde {
+                        let ser_type = match (has_capnp, has_serde) {
+                            (true, true) => SerializationType::Both,
+                            (true, false) => SerializationType::Capnp,
+                            (false, true) => SerializationType::Serde,
+                            _ => continue,
+                        };
+                        let input = DeriveInput {
+                            attrs: s.attrs,
+                            vis: s.vis,
+                            ident: s.ident,
+                            generics: s.generics,
+                            data: Data::Struct(syn::DataStruct {
+                                struct_token: s.struct_token,
+                                fields: s.fields,
+                                semi_token: s.semi_token,
+                            }),
+                        };
+                        structs.push(mk_struct(&input, ser_type));
+                    }
                 }
-                Item::Enum(e) if has_capnp_attr(&e.attrs) => {
-                    let input = DeriveInput {
-                        attrs: e.attrs,
-                        vis: e.vis,
-                        ident: e.ident,
-                        generics: e.generics,
-                        data: Data::Enum(syn::DataEnum {
+                Item::Enum(e) => {
+                    let (has_capnp, has_serde) = has_serialization_attr(&e.attrs);
+                    if has_capnp || has_serde {
+                        let ser_type = match (has_capnp, has_serde) {
+                            (true, true) => SerializationType::Both,
+                            (true, false) => SerializationType::Capnp,
+                            (false, true) => SerializationType::Serde,
+                            _ => continue,
+                        };
+                        let input = DeriveInput {
+                            attrs: e.attrs,
+                            vis: e.vis,
+                            ident: e.ident,
+                            generics: e.generics,
+                            data: Data::Enum(syn::DataEnum {
+                                enum_token: e.enum_token,
+                                brace_token: e.brace_token,
+                                variants: e.variants.clone(),
+                            }),
+                        };
+                        enums.push(mk_enum(&input, &syn::DataEnum {
                             enum_token: e.enum_token,
                             brace_token: e.brace_token,
-                            variants: e.variants.clone(),
-                        }),
-                    };
-                    enums.push(mk_enum(&input, &syn::DataEnum {
-                        enum_token: e.enum_token,
-                        brace_token: e.brace_token,
-                        variants: e.variants,
-                    }));
+                            variants: e.variants,
+                        }, ser_type));
+                    }
                 }
-                Item::Trait(t) if has_capnp_attr(&t.attrs) => interfaces.push(mk_interface(&t)),
+                Item::Trait(t) => {
+                    let (has_capnp, _) = has_serialization_attr(&t.attrs);
+                    if has_capnp {
+                        interfaces.push(mk_interface(&t));
+                    }
+                }
                 _ => {}
             }
         }
     }
-    
+
+    // Create output directory if it doesn't exist
+    fs::create_dir_all(&output)?;
+
     // Generate the Cap'n Proto schema
     let mut schema = String::from("@0xabcdefabcdefabcdef;\n\n");
     
@@ -303,12 +395,51 @@ pub fn generate_schema() -> Result<()> {
         schema.push_str("}\n\n");
     }
     
-    // Create output directory if it doesn't exist
-    fs::create_dir_all(&output)?;
-    
     // Write the schema to a .capnp file
     let schema_path = output.join("schema.capnp");
     fs::write(&schema_path, schema)?;
+
+    // Generate Rust code with Serde support
+    let mut rust_code = String::new();
+    rust_code.push_str("#[cfg(feature = \"serde\")]\n");
+    rust_code.push_str("use serde::{Serialize, Deserialize};\n\n");
+
+    // Write enums
+    for e in &enums {
+        if e.has_serde {
+            rust_code.push_str(&format!("#[cfg_attr(feature = \"serde\", derive(Serialize, Deserialize))]\n"));
+        }
+        if e.variants.iter().any(|(_, ty)| ty.is_some()) {
+            rust_code.push_str(&format!("pub struct {} {{\n", e.name));
+            for (i, (name, ty)) in e.variants.iter().enumerate() {
+                let ty = ty.as_ref().map_or("()".to_string(), |t| t.to_string());
+                rust_code.push_str(&format!("    pub {}: {},\n", name, ty));
+            }
+            rust_code.push_str("}\n\n");
+        } else {
+            rust_code.push_str(&format!("pub enum {} {{\n", e.name));
+            for (name, _) in &e.variants {
+                rust_code.push_str(&format!("    {},\n", name));
+            }
+            rust_code.push_str("}\n\n");
+        }
+    }
+
+    // Write structs
+    for s in &structs {
+        if s.has_serde {
+            rust_code.push_str(&format!("#[cfg_attr(feature = \"serde\", derive(Serialize, Deserialize))]\n"));
+        }
+        rust_code.push_str(&format!("pub struct {} {{\n", s.name));
+        for (name, _, ty) in &s.fields {
+            rust_code.push_str(&format!("    pub {}: {},\n", name, ty));
+        }
+        rust_code.push_str("}\n\n");
+    }
+
+    // Write the Rust code to a .rs file
+    let rust_path = output.join("schema_serde.rs");
+    fs::write(&rust_path, rust_code)?;
     
     // Compile the Cap'n Proto schema to Rust
     capnpc::CompilerCommand::new()

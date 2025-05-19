@@ -10,6 +10,10 @@ futures.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 capnez-macros = { path = "../macros" }
+serde = { version = "1.0", features = ["derive"], optional = true }
 
 [build-dependencies]
 capnez-codegen = { path = "../codegen" }
+
+[features]
+serde = ["dep:serde"]

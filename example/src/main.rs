@@ -1,11 +1,16 @@
 use capnez_macros::capnp;
+#[cfg(feature = "serde")]
+use serde::{Serialize, Deserialize};
 
 #[capnp]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 struct HelloRequest {
     name: String,
+    age: u32,
 }
 
 #[capnp]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 struct HelloReply {
     message: String,
 }
@@ -17,6 +22,11 @@ trait HelloWorld {
 
 pub mod schema_capnp {
     include!(concat!(env!("OUT_DIR"), "/generated/schema_capnp.rs"));
+}
+
+#[cfg(feature = "serde")]
+pub mod schema_serde {
+    include!(concat!(env!("OUT_DIR"), "/generated/schema_serde.rs"));
 }
 
 pub mod client;
