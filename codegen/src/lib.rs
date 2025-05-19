@@ -457,3 +457,12 @@ pub fn generate_schema() -> Result<()> {
         
     Ok(())
 } 
+
+#[macro_export]
+macro_rules! capnp_include {
+    () => {
+        pub mod schema_capnp {
+            include!(concat!(env!("OUT_DIR"), "/generated/schema_capnp.rs"));
+        }
+    };
+}

@@ -1,6 +1,9 @@
 use capnez_macros::capnp;
 #[cfg(feature = "serde")]
 use serde::{Serialize, Deserialize};
+use capnez_codegen::capnp_include;
+
+capnp_include!();
 
 #[capnp]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -18,10 +21,6 @@ struct HelloReply {
 #[capnp]
 trait HelloWorld {
     fn say_hello(request: HelloRequest) -> HelloReply;
-}
-
-pub mod schema_capnp {
-    include!(concat!(env!("OUT_DIR"), "/generated/schema_capnp.rs"));
 }
 
 pub mod client;
