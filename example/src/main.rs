@@ -17,16 +17,11 @@ struct HelloReply {
 
 #[capnp]
 trait HelloWorld {
-    fn sayHello(request: HelloRequest) -> HelloReply;
+    fn say_hello(request: HelloRequest) -> HelloReply;
 }
 
 pub mod schema_capnp {
     include!(concat!(env!("OUT_DIR"), "/generated/schema_capnp.rs"));
-}
-
-#[cfg(feature = "serde")]
-pub mod schema_serde {
-    include!(concat!(env!("OUT_DIR"), "/generated/schema_serde.rs"));
 }
 
 pub mod client;

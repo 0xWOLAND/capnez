@@ -128,8 +128,25 @@ fn extract_generic_ty(p: &syn::TypePath, ser_type: SerializationType) -> CapnpTy
     }
 }
 
+fn to_camel_case(s: &str, is_type: bool) -> String {
+    let mut result = String::new();
+    let mut capitalize = is_type; // Only capitalize first letter for types
+    
+    for c in s.chars() {
+        if c == '_' {
+            capitalize = true;
+        } else if capitalize {
+            result.push(c.to_ascii_uppercase());
+            capitalize = false;
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 fn mk_struct(input: &DeriveInput, ser_type: SerializationType) -> CapnpStruct {
-    let name = input.ident.to_string();
+    let name = to_camel_case(&input.ident.to_string(), true);
     let has_serde = matches!(ser_type, SerializationType::Serde | SerializationType::Both);
     let fields = match &input.data {
         Data::Struct(s) => match &s.fields {
@@ -151,7 +168,7 @@ fn mk_struct(input: &DeriveInput, ser_type: SerializationType) -> CapnpStruct {
                             None
                         })
                         .unwrap_or(field_name.clone());
-                    (serde_rename, i, map_ty(&f.ty, ser_type))
+                    (to_camel_case(&serde_rename, false), i, map_ty(&f.ty, ser_type))
                 })
                 .collect(),
             _ => panic!("Only named structs are supported")
@@ -162,7 +179,7 @@ fn mk_struct(input: &DeriveInput, ser_type: SerializationType) -> CapnpStruct {
 }
 
 fn mk_enum(input: &DeriveInput, data: &syn::DataEnum, ser_type: SerializationType) -> CapnpEnum {
-    let name = input.ident.to_string();
+    let name = to_camel_case(&input.ident.to_string(), true);
     let has_serde = matches!(ser_type, SerializationType::Serde | SerializationType::Both);
     let variants = data.variants.iter()
         .map(|v| {
@@ -172,23 +189,23 @@ fn mk_enum(input: &DeriveInput, data: &syn::DataEnum, ser_type: SerializationTyp
                 syn::Fields::Unnamed(_) => panic!("Enum variants must have exactly one unnamed field"),
                 _ => None,
             };
-            (v.ident.to_string(), ty)
+            (to_camel_case(&v.ident.to_string(), false), ty)
         })
         .collect();
     CapnpEnum { name, variants, has_serde }
 }
 
 fn mk_interface(input: &ItemTrait) -> CapnpInterface {
-    let name = input.ident.to_string();
+    let name = to_camel_case(&input.ident.to_string(), true);
     let methods = input.items.iter()
         .filter_map(|item| {
             if let syn::TraitItem::Fn(method) = item {
-                let name = method.sig.ident.to_string();
+                let name = to_camel_case(&method.sig.ident.to_string(), false);
                 let params = method.sig.inputs.iter()
                     .filter_map(|arg| {
                         if let syn::FnArg::Typed(pat_type) = arg {
                             if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-                                Some((pat_ident.ident.to_string(), map_ty(&pat_type.ty, SerializationType::Capnp)))
+                                Some((to_camel_case(&pat_ident.ident.to_string(), false), map_ty(&pat_type.ty, SerializationType::Capnp)))
                             } else {
                                 None
                             }
@@ -398,48 +415,6 @@ pub fn generate_schema() -> Result<()> {
     // Write the schema to a .capnp file
     let schema_path = output.join("schema.capnp");
     fs::write(&schema_path, schema)?;
-
-    // Generate Rust code with Serde support
-    let mut rust_code = String::new();
-    rust_code.push_str("#[cfg(feature = \"serde\")]\n");
-    rust_code.push_str("use serde::{Serialize, Deserialize};\n\n");
-
-    // Write enums
-    for e in &enums {
-        if e.has_serde {
-            rust_code.push_str(&format!("#[cfg_attr(feature = \"serde\", derive(Serialize, Deserialize))]\n"));
-        }
-        if e.variants.iter().any(|(_, ty)| ty.is_some()) {
-            rust_code.push_str(&format!("pub struct {} {{\n", e.name));
-            for (i, (name, ty)) in e.variants.iter().enumerate() {
-                let ty = ty.as_ref().map_or("()".to_string(), |t| t.to_string());
-                rust_code.push_str(&format!("    pub {}: {},\n", name, ty));
-            }
-            rust_code.push_str("}\n\n");
-        } else {
-            rust_code.push_str(&format!("pub enum {} {{\n", e.name));
-            for (name, _) in &e.variants {
-                rust_code.push_str(&format!("    {},\n", name));
-            }
-            rust_code.push_str("}\n\n");
-        }
-    }
-
-    // Write structs
-    for s in &structs {
-        if s.has_serde {
-            rust_code.push_str(&format!("#[cfg_attr(feature = \"serde\", derive(Serialize, Deserialize))]\n"));
-        }
-        rust_code.push_str(&format!("pub struct {} {{\n", s.name));
-        for (name, _, ty) in &s.fields {
-            rust_code.push_str(&format!("    pub {}: {},\n", name, ty));
-        }
-        rust_code.push_str("}\n\n");
-    }
-
-    // Write the Rust code to a .rs file
-    let rust_path = output.join("schema_serde.rs");
-    fs::write(&rust_path, rust_code)?;
     
     // Compile the Cap'n Proto schema to Rust
     capnpc::CompilerCommand::new()
@@ -448,6 +423,37 @@ pub fn generate_schema() -> Result<()> {
         .src_prefix(&output)
         .run()
         .context("Failed to compile Cap'n Proto schema")?;
+
+    // Modify the generated Cap'n Proto code to include Serde support
+    let capnp_path = output.join("schema_capnp.rs");
+    let mut capnp_code = fs::read_to_string(&capnp_path)
+        .context("Failed to read generated Cap'n Proto code")?;
+
+    // Add Serde imports and derives at the top
+    let serde_imports = "#[cfg(feature = \"serde\")]\nuse serde::{Serialize, Deserialize};\n\n";
+    capnp_code = serde_imports.to_string() + &capnp_code;
+
+    // Add Serde derives to structs and enums
+    for s in &structs {
+        if s.has_serde {
+            let derive = format!("#[cfg_attr(feature = \"serde\", derive(Serialize, Deserialize))]\n");
+            capnp_code = capnp_code.replace(&format!("pub struct {}", s.name), &format!("{}\npub struct {}", derive, s.name));
+        }
+    }
+
+    for e in &enums {
+        if e.has_serde {
+            let derive = format!("#[cfg_attr(feature = \"serde\", derive(Serialize, Deserialize))]\n");
+            if e.variants.iter().any(|(_, ty)| ty.is_some()) {
+                capnp_code = capnp_code.replace(&format!("pub struct {}", e.name), &format!("{}\npub struct {}", derive, e.name));
+            } else {
+                capnp_code = capnp_code.replace(&format!("pub enum {}", e.name), &format!("{}\npub enum {}", derive, e.name));
+            }
+        }
+    }
+
+    // Write the modified code back
+    fs::write(&capnp_path, capnp_code)?;
         
     Ok(())
 } 
