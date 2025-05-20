@@ -10,6 +10,7 @@ use capnp::serialize;
 use capnez_codegen::capnp_include;
 use capnez_macros::capnp;
 use std::error::Error;
+use serde_json;
 
 #[capnp]
 struct SparseMatrixData {
@@ -37,10 +38,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     let mut values = builder.init_values(result.values.len() as u32);
     for (i, e) in result.values.iter().enumerate() {
-        let mut entry = values.reborrow().get(i as u32);
-        entry.set_row(e.row);
-        entry.set_col(e.col);
-        entry.set_value(e.value);
+        let bytes = serde_json::to_vec(e)?;
+        let mut entry = values.reborrow().init(i as u32, bytes.len() as u32);
+        for (j, b) in bytes.iter().enumerate() {
+            entry.set(j as u32, *b);
+        }
     }
 
     let path = format!("{}/target/result.bin", env!("OUT_DIR"));
@@ -59,9 +61,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     let values = reader.get_values()?;
     for (i, e) in values.iter().enumerate() {
-        assert_eq!(e.get_row(), result.values[i].row);
-        assert_eq!(e.get_col(), result.values[i].col);
-        assert!((e.get_value() - result.values[i].value).abs() < 1e-6);
+        let bytes: Vec<u8> = e?.iter().map(|b| b).collect();
+        let deserialized: MatrixEntry = serde_json::from_slice(&bytes)?;
+        assert_eq!(deserialized.row, result.values[i].row);
+        assert_eq!(deserialized.col, result.values[i].col);
+        assert!((deserialized.value - result.values[i].value).abs() < 1e-6);
     }
     println!("Deserialization passed!");
     Ok(())

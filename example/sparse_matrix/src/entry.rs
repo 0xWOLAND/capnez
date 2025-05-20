@@ -1,6 +1,5 @@
 use serde::{Serialize, Deserialize};
 
-#[capnez_macros::capnp]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatrixEntry {
     pub row: u32,
