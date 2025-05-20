@@ -46,3 +46,11 @@ capnez_codegen::generate_schema().expect("Failed to generate schema");
 ```
 
 To generate the schema at build time.
+
+
+## Example
+
+See the `example` directory for a complete client-server implementation using this library.
+- [Hello World Server Example](./example/hello_world/README.md)
+- [Serialization Example](./example/serialize/README.md)
+- [Sparse Matrix Multiplication Example](./example/sparse_matrix/README.md)
