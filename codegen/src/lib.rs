@@ -1,18 +1,14 @@
 use anyhow::{Context, Result};
-use std::{fs, path::PathBuf, env, collections::HashMap};
+use std::{fs, path::PathBuf, env, collections::{HashMap, HashSet}};
 use walkdir::WalkDir;
 use syn::{parse_file, Item, DeriveInput, Data, Fields, Type, PathArguments, GenericArgument, Attribute, ItemTrait, Meta};
 
 #[derive(Clone)]
 enum CapnpType {
-    Text,
-    UInt32,
-    UInt64,
-    Bool,
+    Text, UInt32, UInt64, Bool, Bytes,
     List(Box<CapnpType>),
     Optional(Box<CapnpType>),
     Struct(String),
-    Bytes,
 }
 
 impl std::fmt::Display for CapnpType {
@@ -38,63 +34,51 @@ struct CapnpStruct {
     is_bytes: bool,
 }
 
+impl CapnpStruct {
+    fn dependencies(&self) -> HashSet<String> {
+        self.fields.iter()
+            .filter_map(|(_, _, ty)| match ty {
+                CapnpType::Struct(name) => Some(name.clone()),
+                CapnpType::List(inner) | CapnpType::Optional(inner) => match &**inner {
+                    CapnpType::Struct(name) => Some(name.clone()),
+                    _ => None
+                },
+                _ => None
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone)]
 struct CapnpInterface {
     name: String,
     methods: Vec<(String, Vec<(String, CapnpType)>, Option<CapnpType>)>,
 }
 
-// Keep track of which structs should be serialized to bytes
 #[derive(Default)]
-struct StructRegistry {
-    serde_structs: HashMap<String, bool>,
-}
+struct StructRegistry(HashMap<String, bool>);
 
 impl StructRegistry {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    fn register_serde_struct(&mut self, name: &str) {
-        self.serde_structs.insert(name.to_string(), true);
-    }
-
-    fn is_serde_struct(&self, name: &str) -> bool {
-        self.serde_structs.get(name).copied().unwrap_or(false)
-    }
+    fn register_serde_struct(&mut self, name: &str) { self.0.insert(name.to_string(), true); }
+    fn is_serde_struct(&self, name: &str) -> bool { self.0.get(name).copied().unwrap_or(false) }
 }
 
-fn has_serialization_attr(attrs: &[Attribute]) -> (bool, bool) {
+fn has_attrs(attrs: &[Attribute]) -> (bool, bool) {
     attrs.iter().fold((false, false), |(capnp, serde), attr| {
-        if let Some(seg) = attr.path().segments.last() {
-            match seg.ident.to_string().as_str() {
-                "capnp" => (true, serde),
-                "serde" => (capnp, true),
-                "derive" => {
-                    if let syn::Meta::List(list) = &attr.meta {
-                        let has_serde = list.parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
-                            .unwrap_or_default()
-                            .iter()
-                            .any(|meta| matches!(meta, syn::Meta::Path(p) if p.segments.last().map_or(false, |s| s.ident == "Serialize" || s.ident == "Deserialize")));
-                        (capnp, serde || has_serde)
-                    } else {
-                        (capnp, serde)
-                    }
-                }
-                _ => (capnp, serde),
+        let ident = attr.path().segments.last().map(|s| s.ident.to_string());
+        match ident.as_deref() {
+            Some("capnp") => (true, serde),
+            Some("serde") => (capnp, true),
+            Some("derive") => {
+                if let syn::Meta::List(list) = &attr.meta {
+                    let has_serde = list.parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|meta| matches!(meta, syn::Meta::Path(p) if p.segments.last().map_or(false, |s| s.ident == "Serialize" || s.ident == "Deserialize")));
+                    (capnp, serde || has_serde)
+                } else { (capnp, serde) }
             }
-        } else {
-            (capnp, serde)
-        }
-    })
-}
-
-fn has_capnp_bytes_attr(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|attr| {
-        if let Meta::Path(path) = &attr.meta {
-            path.segments.last().map_or(false, |seg| seg.ident == "capnp_bytes")
-        } else {
-            false
+            _ => (capnp, serde)
         }
     })
 }
@@ -111,7 +95,10 @@ fn map_ty(ty: &Type, registry: &StructRegistry) -> CapnpType {
                 "Option" => CapnpType::Optional(Box::new(extract_generic_ty(p, registry))),
                 "Vec" => CapnpType::List(Box::new(extract_generic_ty(p, registry))),
                 name => {
-                    let pascal_name = to_pascal_case(name);
+                    let pascal_name = name.split('_').map(|w| {
+                        let mut c = w.chars();
+                        c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+                    }).collect::<String>();
                     if registry.is_serde_struct(&pascal_name) {
                         CapnpType::Bytes
                     } else {
@@ -137,84 +124,141 @@ fn extract_generic_ty(p: &syn::TypePath, registry: &StructRegistry) -> CapnpType
     }
 }
 
-fn to_pascal_case(s: &str) -> String {
-    s.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            chars.next().map_or(String::new(), |c| c.to_uppercase().chain(chars).collect())
-        })
-        .collect()
-}
-
-fn to_camel_case(s: &str) -> String {
-    let mut words = s.split('_');
-    words.next().map_or(String::new(), |word| {
-        let mut chars = word.chars();
-        chars.next().map_or(String::new(), |c| c.to_lowercase().chain(chars).collect())
-    }) + &words
-        .map(|word| {
-            let mut chars = word.chars();
-            chars.next().map_or(String::new(), |c| c.to_uppercase().chain(chars).collect())
-        })
-        .collect::<String>()
-}
-
 fn mk_struct(input: &DeriveInput, has_serde: bool, registry: &mut StructRegistry) -> CapnpStruct {
-    let name = to_pascal_case(&input.ident.to_string());
-    let (has_capnp, _) = has_serialization_attr(&input.attrs);
-    let is_bytes = has_serde && !has_capnp;
+    let name = input.ident.to_string().split('_').map(|w| {
+        let mut c = w.chars();
+        c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+    }).collect::<String>();
     
-    if is_bytes {
+    let (has_capnp, _) = has_attrs(&input.attrs);
+    if has_serde {
         registry.register_serde_struct(&name);
     }
 
     let fields = match &input.data {
         Data::Struct(s) => match &s.fields {
-            Fields::Named(n) => n.named.iter()
-                .enumerate()
-                .map(|(i, f)| {
-                    let field_name = f.ident.as_ref().unwrap().to_string();
-                    let field_ty = map_ty(&f.ty, registry);
-                    (to_camel_case(&field_name), i, field_ty)
-                })
-                .collect(),
+            Fields::Named(n) => n.named.iter().enumerate().map(|(i, f)| {
+                let field_name = f.ident.as_ref().unwrap().to_string();
+                let camel_name = field_name.split('_').enumerate().map(|(i, w)| {
+                    let mut c = w.chars();
+                    if i == 0 { c.next().map_or(String::new(), |f| f.to_lowercase().chain(c).collect()) }
+                    else { c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect()) }
+                }).collect::<String>();
+                (camel_name, i, map_ty(&f.ty, registry))
+            }).collect(),
             _ => panic!("Only named structs are supported"),
         },
         _ => panic!("Only structs are supported"),
     };
-    CapnpStruct { name, fields, has_serde, is_bytes }
+    CapnpStruct { name, fields, has_serde, is_bytes: false }
 }
 
 fn mk_interface(input: &ItemTrait) -> CapnpInterface {
-    let name = to_pascal_case(&input.ident.to_string());
-    let methods = input.items.iter()
-        .filter_map(|item| {
-            if let syn::TraitItem::Fn(method) = item {
-                let name = to_camel_case(&method.sig.ident.to_string());
-                let params = method.sig.inputs.iter()
-                    .filter_map(|arg| {
-                        if let syn::FnArg::Typed(pat_type) = arg {
-                            if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
-                                Some((to_camel_case(&pat_ident.ident.to_string()), map_ty(&pat_type.ty, &StructRegistry::new())))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                let ret = match &method.sig.output {
-                    syn::ReturnType::Type(_, ty) => Some(map_ty(&ty, &StructRegistry::new())),
-                    syn::ReturnType::Default => None,
-                };
-                Some((name, params, ret))
-            } else {
-                None
-            }
-        })
-        .collect();
+    let name = input.ident.to_string().split('_').map(|w| {
+        let mut c = w.chars();
+        c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+    }).collect::<String>();
+
+    let methods = input.items.iter().filter_map(|item| {
+        if let syn::TraitItem::Fn(method) = item {
+            let name = method.sig.ident.to_string().split('_').enumerate().map(|(i, w)| {
+                let mut c = w.chars();
+                if i == 0 { c.next().map_or(String::new(), |f| f.to_lowercase().chain(c).collect()) }
+                else { c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect()) }
+            }).collect::<String>();
+
+            let params = method.sig.inputs.iter().filter_map(|arg| {
+                if let syn::FnArg::Typed(pat_type) = arg {
+                    if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+                        let param_name = pat_ident.ident.to_string().split('_').enumerate().map(|(i, w)| {
+                            let mut c = w.chars();
+                            if i == 0 { c.next().map_or(String::new(), |f| f.to_lowercase().chain(c).collect()) }
+                            else { c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect()) }
+                        }).collect::<String>();
+                        Some((param_name, map_ty(&pat_type.ty, &StructRegistry::default())))
+                    } else { None }
+                } else { None }
+            }).collect();
+
+            let ret = match &method.sig.output {
+                syn::ReturnType::Type(_, ty) => Some(map_ty(&ty, &StructRegistry::default())),
+                syn::ReturnType::Default => None,
+            };
+            Some((name, params, ret))
+        } else { None }
+    }).collect();
+
     CapnpInterface { name, methods }
+}
+
+fn topo_sort(structs: &[CapnpStruct]) -> Vec<usize> {
+    let mut visited = HashSet::new();
+    let mut temp = HashSet::new();
+    let mut order = Vec::new();
+    
+    fn visit(i: usize, structs: &[CapnpStruct], visited: &mut HashSet<usize>, 
+             temp: &mut HashSet<usize>, order: &mut Vec<usize>) -> bool {
+        if temp.contains(&i) { return false; }
+        if visited.contains(&i) { return true; }
+        
+        temp.insert(i);
+        for dep in structs[i].dependencies() {
+            if let Some(j) = structs.iter().position(|s| s.name == dep) {
+                if !visit(j, structs, visited, temp, order) { return false; }
+            }
+        }
+        temp.remove(&i);
+        visited.insert(i);
+        order.push(i);
+        true
+    }
+    
+    for i in 0..structs.len() {
+        if !visited.contains(&i) && !visit(i, structs, &mut visited, &mut temp, &mut order) {
+            panic!("Circular dependency detected in struct definitions");
+        }
+    }
+    order.reverse();
+    order
+}
+
+fn collect_structs(file: &syn::File, registry: &mut StructRegistry) -> Vec<CapnpStruct> {
+    // First pass: register all serde structs
+    for item in &file.items {
+        if let Item::Struct(s) = item {
+            let (_, has_serde) = has_attrs(&s.attrs);
+            if has_serde {
+                let name = s.ident.to_string().split('_').map(|w| {
+                    let mut c = w.chars();
+                    c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+                }).collect::<String>();
+                registry.register_serde_struct(&name);
+            }
+        }
+    }
+
+    // Second pass: collect capnp structs
+    let mut structs = Vec::new();
+    for item in &file.items {
+        if let Item::Struct(s) = item {
+            let (has_capnp, has_serde) = has_attrs(&s.attrs);
+            if has_capnp {
+                let input = DeriveInput {
+                    attrs: s.attrs.clone(),
+                    vis: s.vis.clone(),
+                    ident: s.ident.clone(),
+                    generics: s.generics.clone(),
+                    data: Data::Struct(syn::DataStruct {
+                        struct_token: s.struct_token,
+                        fields: s.fields.clone(),
+                        semi_token: s.semi_token,
+                    }),
+                };
+                structs.push(mk_struct(&input, has_serde, registry));
+            }
+        }
+    }
+    structs
 }
 
 pub fn generate_schema() -> Result<()> {
@@ -225,62 +269,67 @@ pub fn generate_schema() -> Result<()> {
     
     let mut structs = Vec::new();
     let mut interfaces = Vec::new();
-    let mut registry = StructRegistry::new();
+    let mut registry = StructRegistry::default();
     
-    // First pass: collect all structs and register serde structs
-    for entry in WalkDir::new(manifest_dir.join("src"))
+    // First pass: collect all files to register serde structs
+    let files: Vec<_> = WalkDir::new(manifest_dir.join("src"))
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().map_or(false, |ext| ext == "rs"))
-    {
+        .collect();
+
+    // Register all serde structs first
+    for entry in &files {
         let content = fs::read_to_string(entry.path())
             .with_context(|| format!("Failed to read {}", entry.path().display()))?;
             
         let file = parse_file(&content)
             .with_context(|| format!("Failed to parse {}", entry.path().display()))?;
             
-        for item in file.items {
-            match item {
-                Item::Struct(s) => {
-                    let (has_capnp, has_serde) = has_serialization_attr(&s.attrs);
-                    if has_capnp || has_serde {
-                        let input = DeriveInput {
-                            attrs: s.attrs,
-                            vis: s.vis,
-                            ident: s.ident,
-                            generics: s.generics,
-                            data: Data::Struct(syn::DataStruct {
-                                struct_token: s.struct_token,
-                                fields: s.fields,
-                                semi_token: s.semi_token,
-                            }),
-                        };
-                        structs.push(mk_struct(&input, has_serde, &mut registry));
-                    }
+        // Register serde structs first
+        for item in &file.items {
+            if let Item::Struct(s) = item {
+                let (_, has_serde) = has_attrs(&s.attrs);
+                if has_serde {
+                    let name = s.ident.to_string().split('_').map(|w| {
+                        let mut c = w.chars();
+                        c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+                    }).collect::<String>();
+                    registry.register_serde_struct(&name);
                 }
-                Item::Trait(t) => {
-                    let (has_capnp, _) = has_serialization_attr(&t.attrs);
-                    if has_capnp {
-                        interfaces.push(mk_interface(&t));
-                    }
-                }
-                _ => {}
             }
         }
     }
 
-    // Generate schema
+    // Second pass: collect capnp structs and interfaces
+    for entry in files {
+        let content = fs::read_to_string(entry.path())
+            .with_context(|| format!("Failed to read {}", entry.path().display()))?;
+            
+        let file = parse_file(&content)
+            .with_context(|| format!("Failed to parse {}", entry.path().display()))?;
+            
+        structs.extend(collect_structs(&file, &mut registry));
+        
+        for item in file.items {
+            if let Item::Trait(t) = item {
+                let (has_capnp, _) = has_attrs(&t.attrs);
+                if has_capnp { interfaces.push(mk_interface(&t)); }
+            }
+        }
+    }
+
     let mut schema = String::from("@0xabcdefabcdefabcdef;\n\n");
     
-    // Write structs and interfaces
-    for s in &structs {
-        if !s.is_bytes {
-            schema.push_str(&format!("struct {} {{\n", s.name));
-            for (name, id, ty) in &s.fields {
-                schema.push_str(&format!("  {} @{} :{};\n", name, id, ty));
-            }
-            schema.push_str("}\n\n");
+    // Sort structs topologically
+    let order = topo_sort(&structs);
+    for &i in &order {
+        let s = &structs[i];
+        schema.push_str(&format!("struct {} {{\n", s.name));
+        for (name, id, ty) in &s.fields {
+            schema.push_str(&format!("  {} @{} :{};\n", name, id, ty));
         }
+        schema.push_str("}\n\n");
     }
     
     for i in &interfaces {
@@ -292,15 +341,12 @@ pub fn generate_schema() -> Result<()> {
                 schema.push_str(&format!("{} :{}", pname, pty));
             }
             schema.push_str(")");
-            if let Some(ret) = ret {
-                schema.push_str(&format!(" -> {}", ret));
-            }
+            if let Some(ret) = ret { schema.push_str(&format!(" -> {}", ret)); }
             schema.push_str(";\n");
         }
         schema.push_str("}\n\n");
     }
     
-    // Write and compile schema
     let schema_path = output.join("schema.capnp");
     fs::write(&schema_path, schema)?;
     
@@ -311,13 +357,14 @@ pub fn generate_schema() -> Result<()> {
         .run()
         .context("Failed to compile Cap'n Proto schema")?;
 
-    // Add Serde support
     let capnp_path = output.join("schema_capnp.rs");
     let mut capnp_code = fs::read_to_string(&capnp_path)
         .context("Failed to read generated Cap'n Proto code")?;
 
-    let serde_imports = "#[cfg(feature = \"serde\")]\nuse serde::{Serialize, Deserialize};\n\n";
-    capnp_code = serde_imports.to_string() + &capnp_code;
+    // Only add serde imports if any struct has serde
+    if structs.iter().any(|s| s.has_serde) {
+        capnp_code = "#[cfg(feature = \"serde\")]\nuse serde::{Serialize, Deserialize};\n\n".to_string() + &capnp_code;
+    }
 
     for s in &structs {
         if s.has_serde {
