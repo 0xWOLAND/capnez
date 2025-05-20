@@ -1,7 +1,7 @@
 use crate::{schema_capnp::hello_world, Information};
 use capnp_rpc::{rpc_twoparty_capnp, twoparty, RpcSystem};
 use std::net::ToSocketAddrs;
-
+use serde_json;
 use futures::AsyncReadExt;
 
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,15 +37,22 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::task::spawn_local(rpc_system);
 
             let mut request = hello_world.say_hello_request();
-            request.get().init_request().set_name(&msg[..]);
-            {
-                let mut info = request.get().init_request().init_information();
-                info.set_major("Computer Science");
-                info.set_age(25);
+            let mut request_builder = request.get().init_request();
+            request_builder.set_name(&msg);
+            
+            // Create Information struct and serialize it to bytes
+            let info = Information {
+                major: "Computer Science".to_string(),
+                age: 25,
+            };
+            let info_bytes = serde_json::to_vec(&info)?;
+            let mut info_list = request_builder.init_information(info_bytes.len() as u32);
+            for (i, &byte) in info_bytes.iter().enumerate() {
+                info_list.set(i as u32, byte);
             }
+
             let reply = request.send().promise.await?;
             
-
             println!(
                 "received: {}",
                 reply.get()?.get_message()?.to_str()?

@@ -4,7 +4,7 @@ use capnez_codegen::capnp_include;
 
 capnp_include!();
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct Information {
     major: String,
     age: u32,

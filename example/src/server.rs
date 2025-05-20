@@ -1,7 +1,8 @@
 use capnp::capability::Promise;
 use capnp_rpc::{pry, rpc_twoparty_capnp, twoparty, RpcSystem};
+use serde_json;
 
-use crate::schema_capnp::hello_world;
+use crate::{schema_capnp::hello_world, Information};
 
 use futures::AsyncReadExt;
 use std::net::ToSocketAddrs;
@@ -16,12 +17,21 @@ impl hello_world::Server for HelloWorldImpl {
     ) -> Promise<(), ::capnp::Error> {
         let request = pry!(pry!(params.get()).get_request());
         let name = pry!(pry!(request.get_name()).to_str());
-        let information = pry!(request.get_information());
-        println!("name: {name}, information: {:?}", information);
-        let message = format!("Hello, {name}!");
-        results.get().set_message(message);
-
-        Promise::ok(())
+        let info_reader = pry!(request.get_information());
+        
+        // Convert Cap'n Proto reader to a Vec<u8>
+        let info_bytes: Vec<u8> = info_reader.iter().collect();
+        
+        // Deserialize Information from bytes
+        match serde_json::from_slice::<Information>(&info_bytes) {
+            Ok(info) => {
+                println!("name: {}, information: {:?}", name, info);
+                let message = format!("Hello, {}! Your major is {} and you are {} years old.", name, info.major, info.age);
+                results.get().set_message(message);
+                Promise::ok(())
+            }
+            Err(e) => Promise::err(capnp::Error::failed(format!("Failed to deserialize Information: {}", e)))
+        }
     }
 }
 
