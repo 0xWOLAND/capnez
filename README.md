@@ -1,4 +1,4 @@
-# `capnez` [![Build](https://github.com/0xWOLAND/capnez/actions/workflows/build.yml/badge.svg)](https://github.com/0xWOLAND/capnez/actions/workflows/build.yml)
+# `capnez` 
 
 This project generates a `.capnp` file at build time from Rust traits/structs, keeping Cap'n Proto projects in pure Rust!
 
