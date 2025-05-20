@@ -3,12 +3,18 @@ name = "capnez-codegen"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+serde = ["dep:serde"]
+
 [dependencies]
-anyhow.workspace = true
-capnpc.workspace = true
 syn.workspace = true
 quote.workspace = true
-
+proc-macro2.workspace = true
+anyhow.workspace = true
 walkdir = "2.4"
+capnpc = { workspace = true }
+serde = { workspace = true, optional = true }
+
 tempfile = "3.8"
 structopt = "0.3"

@@ -88,7 +88,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "capnpc",
+ "proc-macro2",
  "quote",
+ "serde",
  "structopt",
  "syn 2.0.101",
  "tempfile",
@@ -610,6 +612,17 @@ checksum = "4f5fd57c80058a56cf5c777ab8a126398ece8e442983605d280a44ce79d0edef"
 dependencies = [
  "libc",
  "windows-sys",
+]
+
+[[package]]
+name = "sparse_matrix"
+version = "0.1.0"
+dependencies = [
+ "capnez-codegen",
+ "capnez-macros",
+ "capnp",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

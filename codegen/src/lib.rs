@@ -5,7 +5,7 @@ use syn::{parse_file, Item, DeriveInput, Data, Fields, Type, PathArguments, Gene
 
 #[derive(Clone)]
 enum CapnpType {
-    Text, UInt32, UInt64, Bool, Bytes,
+    Text, UInt32, UInt64, Float32, Float64, Bool, Bytes,
     List(Box<CapnpType>),
     Optional(Box<CapnpType>),
     Struct(String),
@@ -17,6 +17,8 @@ impl std::fmt::Display for CapnpType {
             Self::Text => write!(f, "Text"),
             Self::UInt32 => write!(f, "UInt32"),
             Self::UInt64 => write!(f, "UInt64"),
+            Self::Float32 => write!(f, "Float32"),
+            Self::Float64 => write!(f, "Float64"),
             Self::Bool => write!(f, "Bool"),
             Self::List(inner) => write!(f, "List({})", inner),
             Self::Optional(inner) => write!(f, "union {{\n  value @0 :{};\n  none @1 :Void;\n}}", inner),
@@ -56,11 +58,23 @@ struct CapnpInterface {
 }
 
 #[derive(Default)]
-struct StructRegistry(HashMap<String, bool>);
+struct StructRegistry(HashMap<String, (bool, bool)>);
 
 impl StructRegistry {
-    fn register_serde_struct(&mut self, name: &str) { self.0.insert(name.to_string(), true); }
-    fn is_serde_struct(&self, name: &str) -> bool { self.0.get(name).copied().unwrap_or(false) }
+    fn register_serde_struct(&mut self, name: &str) { 
+        let entry = self.0.entry(name.to_string()).or_insert((false, false));
+        entry.1 = true;
+    }
+    fn register_capnp_struct(&mut self, name: &str) {
+        let entry = self.0.entry(name.to_string()).or_insert((false, false));
+        entry.0 = true;
+    }
+    fn is_serde_struct(&self, name: &str) -> bool { 
+        self.0.get(name).map_or(false, |(_, serde)| *serde) 
+    }
+    fn is_capnp_struct(&self, name: &str) -> bool {
+        self.0.get(name).map_or(false, |(capnp, _)| *capnp)
+    }
 }
 
 fn has_attrs(attrs: &[Attribute]) -> (bool, bool) {
@@ -91,6 +105,8 @@ fn map_ty(ty: &Type, registry: &StructRegistry) -> CapnpType {
                 "String" => CapnpType::Text,
                 "u32" => CapnpType::UInt32,
                 "u64" => CapnpType::UInt64,
+                "f32" => CapnpType::Float32,
+                "f64" => CapnpType::Float64,
                 "bool" => CapnpType::Bool,
                 "Option" => CapnpType::Optional(Box::new(extract_generic_ty(p, registry))),
                 "Vec" => CapnpType::List(Box::new(extract_generic_ty(p, registry))),
@@ -99,7 +115,7 @@ fn map_ty(ty: &Type, registry: &StructRegistry) -> CapnpType {
                         let mut c = w.chars();
                         c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
                     }).collect::<String>();
-                    if registry.is_serde_struct(&pascal_name) {
+                    if registry.is_serde_struct(&pascal_name) && !registry.is_capnp_struct(&pascal_name) {
                         CapnpType::Bytes
                     } else {
                         CapnpType::Struct(pascal_name)
@@ -130,10 +146,10 @@ fn mk_struct(input: &DeriveInput, has_serde: bool, registry: &mut StructRegistry
         c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
     }).collect::<String>();
     
-    let (has_capnp, _) = has_attrs(&input.attrs);
     if has_serde {
         registry.register_serde_struct(&name);
     }
+    registry.register_capnp_struct(&name);
 
     let fields = match &input.data {
         Data::Struct(s) => match &s.fields {
@@ -242,6 +258,16 @@ fn collect_structs(file: &syn::File, registry: &mut StructRegistry) -> Vec<Capnp
     for item in &file.items {
         if let Item::Struct(s) = item {
             let (has_capnp, has_serde) = has_attrs(&s.attrs);
+            let name = s.ident.to_string().split('_').map(|w| {
+                let mut c = w.chars();
+                c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+            }).collect::<String>();
+            if has_serde {
+                registry.register_serde_struct(&name);
+            }
+            if has_capnp {
+                registry.register_capnp_struct(&name);
+            }
             if has_capnp {
                 let input = DeriveInput {
                     attrs: s.attrs.clone(),
@@ -278,7 +304,7 @@ pub fn generate_schema() -> Result<()> {
         .filter(|e| e.path().extension().map_or(false, |ext| ext == "rs"))
         .collect();
 
-    // Register all serde structs first
+    // First pass: register all serde structs
     for entry in &files {
         let content = fs::read_to_string(entry.path())
             .with_context(|| format!("Failed to read {}", entry.path().display()))?;
@@ -289,13 +315,16 @@ pub fn generate_schema() -> Result<()> {
         // Register serde structs first
         for item in &file.items {
             if let Item::Struct(s) = item {
-                let (_, has_serde) = has_attrs(&s.attrs);
+                let (has_capnp, has_serde) = has_attrs(&s.attrs);
+                let name = s.ident.to_string().split('_').map(|w| {
+                    let mut c = w.chars();
+                    c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+                }).collect::<String>();
                 if has_serde {
-                    let name = s.ident.to_string().split('_').map(|w| {
-                        let mut c = w.chars();
-                        c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
-                    }).collect::<String>();
                     registry.register_serde_struct(&name);
+                }
+                if has_capnp {
+                    registry.register_capnp_struct(&name);
                 }
             }
         }
