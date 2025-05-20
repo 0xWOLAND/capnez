@@ -1,13 +1,12 @@
 use capnez_macros::capnp;
 use capnez_codegen::capnp_include;
 use serde::{Serialize, Deserialize};
-use std::{fs, io::Cursor};
 
 capnp_include!();
 
 // Define a simple struct that we want to serialize
 #[capnp]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 struct Person {
     name: String,
     age: u32,
@@ -30,13 +29,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     builder.set_age(person.age);
     builder.set_email(&person.email);
     
-    let mut bytes = Vec::new();
-    capnp::serialize::write_message(&mut bytes, &message)?;
+    // Save to file in OUT_DIR
+    let path = format!("{}/target/person.bin", env!("OUT_DIR"));
+    std::fs::create_dir_all(format!("{}/target", env!("OUT_DIR")))?;
+    let mut file = std::fs::File::create(&path)?;
+    capnp::serialize::write_message(&mut file, &message)?;
+    println!("Serialized to {}", path);
     
-    println!("Serialized {} bytes", bytes.len());
-    
-    // Deserialize the bytes back into a Person struct
-    let reader = capnp::serialize::read_message(&mut Cursor::new(&bytes), Default::default())?;
+    // Read from file
+    let mut file = std::fs::File::open(&path)?;
+    let reader = capnp::serialize::read_message(&mut file, Default::default())?;
     let person_reader = reader.get_root::<schema_capnp::person::Reader>()?;
     
     let deserialized_person = Person {
@@ -45,8 +47,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         email: person_reader.get_email()?.to_string()?,
     };
     
-    // Print the deserialized struct
-    println!("Deserialized person: {:#?}", deserialized_person);
+    assert_eq!(person, deserialized_person);
+    
+    println!("All assertions passed!");
 
     Ok(())
 }
