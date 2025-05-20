@@ -348,7 +348,12 @@ pub fn generate_schema() -> Result<()> {
         }
     }
 
-    let mut schema = String::from("@0xabcdefabcdefabcdef;\n\n");
+    // Generate schema ID using capnpc -i
+    let schema_id = String::from_utf8(std::process::Command::new("capnpc").arg("-i").output()?.stdout)?
+        .trim()
+        .trim_start_matches('@')
+        .to_string();
+    let mut schema = format!("@{};\n", schema_id);
     
     // Sort structs topologically
     let order = topo_sort(&structs);
@@ -377,7 +382,11 @@ pub fn generate_schema() -> Result<()> {
     }
     
     let schema_path = output.join("schema.capnp");
-    fs::write(&schema_path, schema)?;
+    fs::write(&schema_path, &schema)?;
+    
+    // Print final schema for debugging
+    let final_schema = fs::read_to_string(&schema_path)?;
+    println!("Final schema file contents: {:?}", final_schema);
     
     capnpc::CompilerCommand::new()
         .file(&schema_path)
