@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "codegen",
-    "example",
+    "example/hello_world",
+    "example/serialize",
     "macros"
 ]
 resolver = "2"

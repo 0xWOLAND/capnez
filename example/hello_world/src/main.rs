@@ -1,22 +1,31 @@
 use capnez_macros::capnp;
+use serde::{Serialize, Deserialize};
+use capnez_codegen::capnp_include;
 
-#[capnp]
-struct HelloRequest {
-    name: String,
+capnp_include!();
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Information {
+    major: String,
+    age: u32,
 }
 
 #[capnp]
-struct HelloReply {
+#[derive(Serialize, Deserialize)]
+pub struct HelloRequest {
+    name: String,
+    information: Information,
+}
+
+#[capnp]
+#[derive(Serialize, Deserialize)]
+pub struct HelloReply {
     message: String,
 }
 
 #[capnp]
-trait HelloWorld {
-    fn sayHello(request: HelloRequest) -> HelloReply;
-}
-
-pub mod schema_capnp {
-    include!(concat!(env!("OUT_DIR"), "/generated/schema_capnp.rs"));
+pub trait HelloWorld {
+    fn say_hello(request: HelloRequest) -> HelloReply;
 }
 
 pub mod client;
