@@ -2,6 +2,15 @@
 
 This project generates a `.capnp` file at build time from Rust traits/structs, keeping Cap'n Proto projects in pure Rust!
 
+## Features
+- Generate Cap'n Proto schemas from Rust structs/traits
+- Support for primitive types, lists, optionals, and nested structs
+- `serde` integration for serialization
+
+## Dependencies
+
+Install the `capnp` command line tool from [here](https://capnproto.org/install.html) 
+
 ## Usage
 
 Add the following to your `Cargo.toml`:
@@ -19,23 +28,15 @@ capnez-codegen = { git = "https://github.com/0xWOLAND/capnez" }
 Then in your Rust code, define your Cap'n Proto interface using Rust types:
 
 ```rust
-use capnez_macros::capnp;
+use capnez::capnp_include;
 
-// Define request/response structs
-#[capnp]
-struct HelloRequest {
+capnp_include!();
+
+#[derive(Capnp, Serialize, Deserialize)]
+struct Person {
     name: String,
-}
-
-#[capnp]
-struct HelloReply {
-    message: String,
-}
-
-// Define your service interface
-#[capnp]
-trait HelloWorld {
-    fn sayHello(request: HelloRequest) -> HelloReply;
+    age: u32,
+    email: String,
 }
 ```
 
@@ -46,7 +47,6 @@ capnez_codegen::generate_schema().expect("Failed to generate schema");
 ```
 
 To generate the schema at build time.
-
 
 ## Examples
 
