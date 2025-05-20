@@ -1,25 +1,30 @@
 use capnez_macros::capnp;
-#[cfg(feature = "serde")]
 use serde::{Serialize, Deserialize};
 use capnez_codegen::capnp_include;
 
 capnp_include!();
 
-#[capnp]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-struct HelloRequest {
-    name: String,
+#[derive(Serialize, Deserialize)]
+struct Information {
+    major: String,
     age: u32,
 }
 
 #[capnp]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-struct HelloReply {
+#[derive(Serialize, Deserialize)]
+pub struct HelloRequest {
+    name: String,
+    information: Information,
+}
+
+#[capnp]
+#[derive(Serialize, Deserialize)]
+pub struct HelloReply {
     message: String,
 }
 
 #[capnp]
-trait HelloWorld {
+pub trait HelloWorld {
     fn say_hello(request: HelloRequest) -> HelloReply;
 }
 

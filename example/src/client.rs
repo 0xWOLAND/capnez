@@ -1,4 +1,4 @@
-use crate::schema_capnp::hello_world;
+use crate::{schema_capnp::hello_world, Information};
 use capnp_rpc::{rpc_twoparty_capnp, twoparty, RpcSystem};
 use std::net::ToSocketAddrs;
 
@@ -38,8 +38,13 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mut request = hello_world.say_hello_request();
             request.get().init_request().set_name(&msg[..]);
-
+            {
+                let mut info = request.get().init_request().init_information();
+                info.set_major("Computer Science");
+                info.set_age(25);
+            }
             let reply = request.send().promise.await?;
+            
 
             println!(
                 "received: {}",
