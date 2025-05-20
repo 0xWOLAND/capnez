@@ -1,9 +1,7 @@
 use capnp::capability::Promise;
 use capnp_rpc::{pry, rpc_twoparty_capnp, twoparty, RpcSystem};
 use serde_json;
-
 use crate::{schema_capnp::hello_world, Information};
-
 use futures::AsyncReadExt;
 use std::net::ToSocketAddrs;
 
@@ -19,10 +17,8 @@ impl hello_world::Server for HelloWorldImpl {
         let name = pry!(pry!(request.get_name()).to_str());
         let info_reader = pry!(request.get_information());
         
-        // Convert Cap'n Proto reader to a Vec<u8>
-        let info_bytes: Vec<u8> = info_reader.iter().collect();
+        let info_bytes: Vec<u8> = (0..info_reader.len()).map(|i| info_reader.get(i)).collect();
         
-        // Deserialize Information from bytes
         match serde_json::from_slice::<Information>(&info_bytes) {
             Ok(info) => {
                 println!("name: {}, information: {:?}", name, info);
@@ -42,33 +38,24 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let addr = args[2]
-        .to_socket_addrs()?
-        .next()
-        .expect("could not parse address");
+    let addr = args[2].to_socket_addrs()?.next().expect("could not parse address");
 
-    tokio::task::LocalSet::new()
-        .run_until(async move {
-            let listener = tokio::net::TcpListener::bind(&addr).await?;
-            let hello_world_client: hello_world::Client = capnp_rpc::new_client(HelloWorldImpl);
+    tokio::task::LocalSet::new().run_until(async move {
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        let hello_world_client: hello_world::Client = capnp_rpc::new_client(HelloWorldImpl);
 
-            loop {
-                let (stream, _) = listener.accept().await?;
-                stream.set_nodelay(true)?;
-                let (reader, writer) =
-                    tokio_util::compat::TokioAsyncReadCompatExt::compat(stream).split();
-                let network = twoparty::VatNetwork::new(
-                    futures::io::BufReader::new(reader),
-                    futures::io::BufWriter::new(writer),
-                    rpc_twoparty_capnp::Side::Server,
-                    Default::default(),
-                );
+        loop {
+            let (stream, _) = listener.accept().await?;
+            stream.set_nodelay(true)?;
+            let (reader, writer) = tokio_util::compat::TokioAsyncReadCompatExt::compat(stream).split();
+            let network = twoparty::VatNetwork::new(
+                futures::io::BufReader::new(reader),
+                futures::io::BufWriter::new(writer),
+                rpc_twoparty_capnp::Side::Server,
+                Default::default(),
+            );
 
-                let rpc_system =
-                    RpcSystem::new(Box::new(network), Some(hello_world_client.clone().client));
-
-                tokio::task::spawn_local(rpc_system);
-            }
-        })
-        .await
+            tokio::task::spawn_local(RpcSystem::new(Box::new(network), Some(hello_world_client.clone().client)));
+        }
+    }).await
 }
