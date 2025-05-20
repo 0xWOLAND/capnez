@@ -1,5 +1,5 @@
 [package]
-name = "capnez-example"
+name = "capnez-hello-world"
 version.workspace = true
 edition.workspace = true
 
@@ -13,10 +13,10 @@ capnp-rpc.workspace = true
 futures.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-capnez-macros = { path = "../macros" }
-capnez-codegen = { path = "../codegen" }
+capnez-macros = { path = "../../macros" }
+capnez-codegen = { path = "../../codegen" }
 serde = { version = "1.0", features = ["derive"]}
 serde_json = "1.0"
 
 [build-dependencies]
-capnez-codegen = { path = "../codegen" }
+capnez-codegen = { path = "../../codegen" }

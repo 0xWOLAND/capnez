@@ -96,7 +96,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "capnez-example"
+name = "capnez-hello-world"
 version = "0.1.0"
 dependencies = [
  "capnez-codegen",
@@ -564,6 +564,18 @@ dependencies = [
  "memchr",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serialize"
+version = "0.1.0"
+dependencies = [
+ "capnez-codegen",
+ "capnez-macros",
+ "capnp",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
