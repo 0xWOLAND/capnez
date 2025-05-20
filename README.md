@@ -50,6 +50,6 @@ To generate the schema at build time.
 
 ## Examples
 
-- [Hello World Server Example](./example/hello_world/README.md)
-- [Serialization Example](./example/serialize/README.md)
-- [Sparse Matrix Multiplication Example](./example/sparse_matrix/README.md)
+- [`hello_world`](./example/hello_world/README.md)
+- [`serialize`](./example/serialize/README.md)
+- [`sparse_matrix`](./example/sparse_matrix/README.md)
