@@ -46,20 +46,3 @@ capnez_codegen::generate_schema().expect("Failed to generate schema");
 ```
 
 To generate the schema at build time.
-
-
-## Example
-
-See the `example` directory for a complete client-server implementation using this library.
-
-Run: 
-```shell
-cargo run -- server 127.0.0.1:8000 # In terminal 1
-cargo run -- client 127.0.0.1:8000 "Bhargav" # In terminal 2
-```
-
-Which should output 
-```
-Running `.../example client '127.0.0.1:8000' Bhargav`
-received: Hello, Bhargav!
-```
